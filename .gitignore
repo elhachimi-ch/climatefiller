@@ -1,0 +1,8 @@
+venv
+.idea
+*.pyc
+__pycache__/
+*.csv
+**/data
+*.ipynb_checkpoints
+*.vscode
