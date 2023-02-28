@@ -1,5 +1,5 @@
-from gis import GIS
-from dataframe import DataFrame
+from data_science_toolkit.gis import GIS
+from data_science_toolkit.dataframe import DataFrame
 import datetime
 import os
 from datetime import timedelta
@@ -27,7 +27,7 @@ class ClimateFiller():
     def download_era5(self):
         pass
     
-    """def rec_fill(self, column_to_fill_name='ta', 
+    def recursive_fill(self, column_to_fill_name='ta', 
                               variable='Ta', 
                               latitude=31.66749781,
                               longitude=-7.593311291):
@@ -43,9 +43,7 @@ class ClimateFiller():
                                                                                  column_to_fill_name,
                                                                                  variable,
                                                                                  latitude,
-                                                                                 longitude))"""
-    
-    
+                                                                                 longitude))
     
     def fill(self, column_to_fill_name='ta', 
                               variable='air_temperature', 
@@ -64,7 +62,7 @@ class ClimateFiller():
         elif variable == 'Rg':
             era5_land_variables = ['surface_solar_radiation_downwards']
             
-        from gis import GIS
+        from data_science_toolkit.gis import GIS
         import cdsapi
         c = cdsapi.Client()
 
