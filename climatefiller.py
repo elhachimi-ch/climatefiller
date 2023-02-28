@@ -10,6 +10,8 @@ from sklearn.ensemble import IsolationForest
 from quantilesdetector import PercentileDetection
 
 class ClimateFiller():
+    """The ClimateFiller class
+    """
     
     def __init__(self, data_link='data.csv', data_type='csv', datetime_column_name='date_time', date_time_format='%Y-%m-%d %H:%M:%S', machine_learning_enabled=False):
         self.data = DataFrame(data_link=data_link, data_type=data_type)
@@ -24,7 +26,7 @@ class ClimateFiller():
         else:
             return self.data.get_dataframe().head(number_of_row)
     
-    def download_era5(self):
+    def download_era5_land_dataframe(self):
         pass
     
     def recursive_fill(self, column_to_fill_name='ta', 
@@ -51,6 +53,25 @@ class ClimateFiller():
                               latitude=31.66749781,
                               longitude=-7.593311291
                               ):
+        """Function Name: fill
+
+            Description:
+            This function fills missing values in a column of a dataframe with values from a weather API using latitude, longitude, and date-time information.
+
+            Parameters:
+
+            self: the instance of the class that the function is a part of.
+            column_to_fill_name: (optional) the name of the column in the dataframe that will be filled with the weather data. Default value is 'ta'.
+            variable: (optional) the name of the weather variable to be queried from the API. Default value is 'air_temperature'.
+            datetime_column_name: (optional) the name of the column in the dataframe that contains the date-time information. Default value is 'date_time'.
+            latitude: (optional) the latitude of the location for which weather data is being queried. Default value is 31.66749781.
+            longitude: (optional) the longitude of the location for which weather data is being queried. Default value is -7.593311291.
+            Returns:
+            None. The function modifies the dataframe in place, filling in missing values with data from the weather API.
+
+            Note:
+            This function assumes that the dataframe already contains a column with the date-time information in the format YYYY-MM-DD HH:MM:SS. The function also requires an API key for the weather API, which must be set as an attribute of the class instance before calling the function. The API key can be obtained by registering for an account with the weather API provider.
+                    """
         if self.missing_data_checking(column_to_fill_name, verbose=False) == 0:
             print('No missing data found in ' + column_to_fill_name)
             return
@@ -231,6 +252,22 @@ class ClimateFiller():
     
 
     def missing_data_checking(self, column_name=None, verbose=True):
+        """Function Name: missing_data_checking
+
+            Description:
+            This function checks for missing data in a column of a dataframe.
+
+            Parameters:
+
+            self: the instance of the class that the function is a part of.
+            column_name: (optional) the name of the column to check for missing data. If not provided, the function will check for missing data in all columns of the dataframe. Default value is None.
+            verbose: (optional) a boolean value that determines whether the function should print a summary of the missing data. Default value is True.
+            Returns:
+            A dictionary that contains the number and percentage of missing values for each column checked.
+
+            Note:
+            This function assumes that the dataframe has already been loaded into the class instance.
+        """
         miss = 0
         if column_name is not None:
             if any(pd.isna(self.data.get_dataframe()[column_name])) is True:
@@ -260,6 +297,24 @@ class ClimateFiller():
         pass
     
     def eliminate_outliers(self, climate_varibale_column_name='ta', method='lof', n_neighbors=48, contamination=0.005):
+        """Function Name: eliminate_outliers
+
+            Description:
+            This function eliminates outliers from a column of a dataframe using the Local Outlier Factor (LOF) algorithm, the Isolation Forest algorithm or quantiles.
+
+            Parameters:
+
+            self: the instance of the class that the function is a part of.
+            climate_varibale_column_name: (optional) the name of the column in the dataframe that contains the climate variable. Default value is 'ta'.
+            method: (optional) the name of the algorithm used to identify outliers. Possible values are 'lof' for Local Outlier Factor, and 'isolation_forest' for Isolation Forest. Default value is 'lof'.
+            n_neighbors: (optional) the number of neighbors to consider when calculating the LOF score. This parameter is only used when method is set to 'lof'. Default value is 48.
+            contamination: (optional) the proportion of outliers in the dataset. This parameter is only used when method is set to 'isolation_forest'. Default value is 0.005.
+            Returns:
+            A dataframe that contains the original data with the identified outliers removed.
+
+            Note:
+            This function assumes that the dataframe has already been loaded into the class instance. If the LOF algorithm is used, this function requires the scikit-learn library to be installed. If the Isolation Forest algorithm is used, this function requires the PyOD library to be installed.
+        """
         if method == 'lof':
             outliers_model = LocalOutlierFactor(n_neighbors=n_neighbors, contamination=contamination)
             self.data.get_dataframe()['inlier'] = outliers_model.fit_predict(self.data.get_columns([climate_varibale_column_name]))
@@ -287,6 +342,21 @@ class ClimateFiller():
         pass
     
     def plot_column(self, column):
+        """Function Name: plot_column
+
+            Description:
+            This function creates a time-series plot of a column in a dataframe.
+
+            Parameters:
+
+            self: the instance of the class that the function is a part of.
+            column: the name of the column to plot.
+            Returns:
+            None. The function generates a time-series plot of the specified column.
+
+            Note:
+            This function assumes that the dataframe has already been loaded into the class instance. This function requires the matplotlib and seaborn libraries to be installed.
+        """
         self.data.get_column(column).plot()
         plt.show()
     
@@ -296,10 +366,45 @@ class ClimateFiller():
         self.data.drop_column('decision')
         
     def apply_constraint(self, column_name, constraint):
-            self.data.filter_dataframe(column_name, constraint)
+        """Function Name: apply_constraint
+
+            Description:
+            This function applies a constraint to a column of a dataframe.
+
+            Parameters:
+
+            self: the instance of the class that the function is a part of.
+            column_name: the name of the column to apply the constraint to.
+            constraint: a string that represents the constraint to apply. The string should be in the form of a valid Python expression. The constraint will be applied to the column using the eval() function.
+            Returns:
+            A dataframe with the specified constraint applied to the specified column.
+
+            Note:
+            This function assumes that the dataframe has already been loaded into the class instance. The constraint parameter should be a valid Python expression that can be evaluated using the eval() function. This function requires the pandas library to be installed.
+        """
+        self.data.filter_dataframe(column_name, constraint)
     
     def missing_data(self, drop_row_if_nan_in_column=None, filling_dict_colmn_val=None, method='ffill',
                      column_to_fill='Ta', date_column_name=None):
+        """Function Name: missing_data
+
+            Description:
+            This function fills or drops missing data in a dataframe.
+
+            Parameters:
+
+            self: the instance of the class that the function is a part of.
+            drop_row_if_nan_in_column: (optional) the name of a column in the dataframe. If provided, the function will drop rows where this column contains NaN values. Default value is None.
+            filling_dict_colmn_val: (optional) a dictionary containing column names and values to be used to fill missing data in those columns. The keys of the dictionary should be the names of the columns to be filled, and the values should be the values to use for filling. Default value is None.
+            method: (optional) a string that determines the method used for filling missing data. Possible values are 'ffill' for forward filling, 'bfill' for backward filling, or 'interpolate' for linear interpolation. Default value is 'ffill'.
+            column_to_fill: (optional) the name of the column to be filled. This parameter is only used when method is set to 'ffill' or 'bfill'. Default value is 'Ta'.
+            date_column_name: (optional) the name of the column in the dataframe that contains the date-time information. This parameter is only used when method is set to 'interpolate'. Default value is None.
+            Returns:
+            A dataframe with missing values filled or dropped according to the specified parameters.
+
+            Note:
+            This function assumes that the dataframe has already been loaded into the class instance. If filling_dict_colmn_val is used, the keys of the dictionary should correspond to columns in the dataframe. If method is set to 'interpolate', the date_column_name parameter must be provided. This function requires the pandas library to be installed.
+        """
         if filling_dict_colmn_val is None and drop_row_if_nan_in_column is None:
             if method == 'ffill':
                 self.data.get_dataframe().fillna(method='pad', inplace=True)
