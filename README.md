@@ -33,7 +33,7 @@ climate_filler.eliminate_outliers('Ta')
 
 ## Documentation
 
-More information can be found on the [DST documentation site.](https://data-science-toolkit.readthedocs.io)
+More information can be found on the [ClimateFiller framework documentation site.](https://data-science-toolkit.readthedocs.io)
 
 ### Contributing
 
