@@ -1,14 +1,31 @@
-from climatefiller import ClimateFiller
+import time
 from data_science_toolkit.dataframe import DataFrame
+from climatefiller import ClimateFiller
 
-# Read the time series 
-data = DataFrame(r"data/sample_time_series.csv")
 
-# Rename target colmn 
-data.rename_columns({'air_temperature':'Ta'})
+def main():
+    ti = time.time()
+    
+    # Read the time series 
+    data = DataFrame("data/air_temperature.csv")
 
-# Initilize the ClimateFiller object
-climate_filler = ClimateFiller(data.get_dataframe(), data_type='df')
+    # Rename target colmn 
+    data.rename_columns({'air_temperature':'Ta'})
 
-# Detect and eliminate outliers
-climate_filler.eliminate_outliers('Ta')
+    # Initilize the ClimateFiller object
+    climate_filler = ClimateFiller(data.get_dataframe(), data_type='df', datetime_column_name='datetime')
+
+    # Replace missing values with 0
+    climate_filler.missing_data(filling_dict_colmn_val={'Ta': 0})
+
+    # Detect and eliminate outliers
+    climate_filler.eliminate_outliers('Ta', )
+
+   
+    print(time.time() - ti)
+
+
+if __name__ == '__main__':
+    main()
+
+
