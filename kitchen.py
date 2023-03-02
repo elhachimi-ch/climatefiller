@@ -7,12 +7,10 @@ def main():
     ti = time.time()
     
     # Read the time series 
-    data = DataFrame("E:\projects\data\r3\stations_from_youness.xlsx", data_type='xls', sheet_name='oukaimeden')
+    data = DataFrame("data/air_temperature.csv")
 
     # Rename target colmn 
-    data.rename_columns({'Ouka_1_Tair_(°C)':'Ta'})
-    
-    
+    data.rename_columns({'air_temperature':'Ta'})
 
     # Initilize the ClimateFiller object
     climate_filler = ClimateFiller(data.get_dataframe(), data_type='df', datetime_column_name='datetime')
