@@ -7,7 +7,7 @@ def main():
     ti = time.time()
     
     # Read the time series 
-    data = DataFrame("data/air_temperature.csv")
+    data = DataFrame("data/los_angele_sair_temperature.csv")
 
     # Rename target colmn 
     data.rename_columns({'air_temperature':'Ta'})
