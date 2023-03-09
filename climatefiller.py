@@ -422,4 +422,165 @@ class ClimateFiller():
                 # a = a[~(np.isnan(a).all(axis=1))] # removes rows containing all nan
                 self.data.set_dataframe(self.data.get_dataframe()[self.data.get_dataframe()[drop_row_if_nan_in_column].notna()])
                 #self.__dataframe = self.__dataframe[~(np.isnan(self.__dataframe).any(axis=1))] # removes rows containing at least one nan
-          
+
+    def download(self, 
+    variable, 
+    start_datetime,
+    end_datetime,
+    latitude=31.66749781,
+    longitude=-7.593311291,
+    product='era5-Land'):
+        if product == 'era5-Land':
+            if variable == 'Ta':
+                era5_land_variables = ['2m_temperature']
+            elif variable == 'Hr':
+                era5_land_variables = ['2m_temperature', '2m_dewpoint_temperature']
+            elif variable == 'Rg':
+                era5_land_variables = ['surface_solar_radiation_downwards']
+                
+            from data_science_toolkit.gis import GIS
+            import cdsapi
+            c = cdsapi.Client()
+
+            # create the target time series
+            target_time_series = datetime.datetime()
+
+            for y in target_time_series.years:
+                for month in target_time_series.months:
+                    if len(era5_land_variables) == 1:
+                        if os.path.exists("E:\projects\pythonsnippets\era5_r3_" + column_to_fill_name + '_' + str(y) + '_' + month + '.grib') is False:
+                            c.retrieve(
+                            'reanalysis-era5-land',
+                            {
+                                'format': 'grib',
+                                'variable': era5_land_variables,
+                                'year': str(y),
+                                'month':  month,
+                                'day': missing_data_dict['day'],
+                                'time': [
+                                    '00:00', '01:00', '02:00',
+                                    '03:00', '04:00', '05:00',
+                                    '06:00', '07:00', '08:00',
+                                    '09:00', '10:00', '11:00',
+                                    '12:00', '13:00', '14:00',
+                                    '15:00', '16:00', '17:00',
+                                    '18:00', '19:00', '20:00',
+                                    '21:00', '22:00', '23:00',
+                                ],
+                                'area': [
+                                    latitude, longitude, latitude,
+                                    longitude
+                                ],
+                            },
+                            'era5_r3_' + column_to_fill_name + '_' + str(y) + '_' + month + '.grib')
+                    else:
+                        for p in era5_land_variables:
+                            if os.path.exists("E:\projects\pythonsnippets\era5_r3_" + column_to_fill_name + '_' + str(p) + '_' + str(y) + '_' + month + '.grib') is False:
+                                c.retrieve(
+                                'reanalysis-era5-land',
+                                {
+                                    'format': 'grib',
+                                    'variable': p,
+                                    'year': str(y),
+                                    'month':  month,
+                                    'day': missing_data_dict['day'],
+                                    'time': [
+                                        '00:00', '01:00', '02:00',
+                                        '03:00', '04:00', '05:00',
+                                        '06:00', '07:00', '08:00',
+                                        '09:00', '10:00', '11:00',
+                                        '12:00', '13:00', '14:00',
+                                        '15:00', '16:00', '17:00',
+                                        '18:00', '19:00', '20:00',
+                                        '21:00', '22:00', '23:00',
+                                    ],
+                                    'area': [
+                                        latitude, longitude, latitude,
+                                        longitude
+                                    ],
+                                },
+                                'era5_r3_' + column_to_fill_name + '_' + str(p) + '_' + str(y) + '_' + month + '.grib')
+                        
+            
+            gis = GIS()
+            data = DataFrame()
+            
+            if column_to_fill_name == 'Ta':
+                for year in target_time_series.years:
+                    for month in target_time_series.months:
+                        data.append_dataframe(gis.get_era5_land_grib_as_dataframe("E:\projects\pythonsnippets\era5_r3_" + column_to_fill_name + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                        
+                data.reset_index()
+                data.reindex_dataframe("valid_time")
+                data.missing_data('t2m')
+                data.transform_column('t2m', 't2m', lambda o: o - 273.15)
+                
+            elif column_to_fill_name == 'Hr':
+                data_t2m = DataFrame()
+                data_d2m = DataFrame()
+                for year in missing_data_dates:
+                    for month in missing_data_dates[year]['month']:
+                        data_t2m.append_dataframe(gis.get_era5_land_grib_as_dataframe("E:\projects\pythonsnippets\era5_r3_" + column_to_fill_name + '_' + '2m_temperature' + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                for year in missing_data_dates:
+                    for month in missing_data_dates[year]['month']:
+                        data_d2m.append_dataframe(gis.get_era5_land_grib_as_dataframe("E:\projects\pythonsnippets\era5_r3_" + column_to_fill_name + '_' + '2m_dewpoint_temperature' + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                
+                data_d2m.reset_index()
+                data_d2m.reindex_dataframe("valid_time")
+                data_d2m.keep_columns(['d2m'])
+                data_t2m.reset_index()
+                data_t2m.reindex_dataframe("valid_time")
+                data_t2m.keep_columns(['t2m'])
+                data_t2m.join(data_d2m.get_dataframe())
+                data = data_t2m
+                data.missing_data('t2m')
+                data.transform_column('t2m', 't2m', lambda o: o - 273.15)
+                data.transform_column('d2m', 'd2m', lambda o: o - 273.15)
+                data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
+                data.missing_data('era5_hr')
+                nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
+                for p in nan_indices:
+                    self.data.set_row('Hr', p, data.get_row(p)['era5_hr'])
+                
+                print('Imputation of missing data for Hr from ERA5-Land was done!')
+            elif column_to_fill_name == 'Rg':
+                for year in missing_data_dates:
+                    for month in missing_data_dates[year]['month']:
+                        data.append_dataframe(gis.get_era5_land_grib_as_dataframe("E:\projects\pythonsnippets\era5_r3_" + column_to_fill_name + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                        
+                data.reset_index()
+                data.reindex_dataframe("valid_time")
+                data.missing_data('ssrd')
+                l = []
+                for p in data.get_index():
+                    if p.hour == 1:
+                        new_value = data.get_row(p)['ssrd']/3600
+                    else:
+                        try:
+                            previous_hour = data.get_row(p-timedelta(hours=1))['ssrd']
+                        except KeyError: # if age is not convertable to int
+                            previous_hour = data.get_row(p)['ssrd']
+                            
+                        new_value = (data.get_row(p)['ssrd'] - previous_hour)/3600
+                    l.append(new_value)
+                data.add_column(l, 'rg')
+                data.keep_columns(['rg'])
+                data.rename_columns({'rg': 'ssrd'})
+                print(data.show())
+                
+                data.transform_column('ssrd', 'ssrd', lambda o : o if abs(o) < 1500 else 0 )    
+                data.export('rg.csv', index=True)
+                nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
+                for p in nan_indices:
+                    self.data.set_row('Rg', p, data.get_row(p)['ssrd'])
+                
+                print('Imputation of missing data for Rg from ERA5-Land was done!')
+        elif product == 'mera':
+            pass
+        else:
+            pass
+    
+    def reference_evapotranspiration(self, climate_variables_path='data/in_situ_data.xls', data_type='xls', method='pm'):
+        pass
+
+    
