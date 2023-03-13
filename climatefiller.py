@@ -583,4 +583,14 @@ class ClimateFiller():
     def reference_evapotranspiration(self, climate_variables_path='data/in_situ_data.xls', data_type='xls', method='pm'):
         pass
 
-    
+
+    def learn_error(self,):
+        data_x =
+        data_y =
+
+        model = model.best_model()
+
+        model.train()
+        
+        for p in missing_data_row:
+            data.set_row('', model.predict(data.get_row))
