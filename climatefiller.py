@@ -360,6 +360,42 @@ class ClimateFiller():
         self.data.get_column(column).plot()
         plt.show()
     
+    def et0_estimation(self, 
+                       air_temperture_column_name='ta',
+                       global_solar_radiation_column_name='rs',
+                       air_relative_humidity_column_name='rh',
+                       wind_speed_column_name='ws',
+                       date_time_column_name='date_time',
+                       latitude=31.65410805,
+                       longitude=-7.603140831,
+                       method='pm',
+                       in_place=True
+                       ):
+        
+        et0_data = DataFrame()
+        et0_data.add_column('ta_mean', self.resample_timeseries(in_place=False)[air_temperture_column_name])
+        et0_data.add_column('ta_max', self.resample_timeseries(in_place=False, agg='max')[air_temperture_column_name])
+        et0_data.add_column('ta_min', self.resample_timeseries(in_place=False, agg='min')[air_temperture_column_name], )
+        et0_data.add_column('rh_max', self.resample_timeseries(in_place=False, agg='max')[air_relative_humidity_column_name])
+        et0_data.add_column('rh_min', self.resample_timeseries(in_place=False, agg='min')[air_relative_humidity_column_name])
+        et0_data.add_column('rh_mean', self.resample_timeseries(in_place=False)[air_relative_humidity_column_name])
+        et0_data.add_column('u2_mean', self.resample_timeseries(in_place=False)[wind_speed_column_name])
+        et0_data.add_column('rg_mean', self.resample_timeseries(in_place=False)[global_solar_radiation_column_name])
+        et0_data.index_to_column()
+        et0_data.add_doy_column('date_time')
+        et0_data.add_one_value_column('elevation', DataFrame.get_elevation_and_latitude(latitude, longitude))
+        et0_data.add_one_value_column('lat', latitude)
+        
+        if method == 'pm':
+            et0_data.add_column_based_on_function('et0_pm', DataFrame.et0_penman_monteith)
+        elif method == 'hargreaves':
+            et0_data.add_column_based_on_function('et0_hargreaves', DataFrame.et0_hargreaves)
+            
+        if in_place == True:
+            self.__dataframe = et0_data.get_dataframe()
+            
+        return et0_data.get_dataframe()
+    
     def apply_quality_control_criteria(self, variable_column_name, decision_func=lambda x:x>0):
         self.data.add_column(self.data.get_column(variable_column_name).apply(decision_func), 'decision')
         self.data.get_dataframe().loc[ self.data.get_dataframe()['decision'] == False, variable_column_name] = None
