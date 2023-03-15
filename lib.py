@@ -1,6 +1,6 @@
 import math
+import requests
 
-@staticmethod
 def et0_penman_monteith(row):
     # input variables
     # T = 25.0  # air temperature in degrees Celsius
@@ -86,7 +86,6 @@ def et0_penman_monteith(row):
     # output result
     return et0
 
-@staticmethod
 def et0_hargreaves(row):
     ta_mean, ta_max, ta_min, lat, doy =  row['ta_mean'], row['ta_max'], row['ta_min'], row['lat'], row['doy']
     
@@ -105,3 +104,17 @@ def et0_hargreaves(row):
     et0 = 0.0023 * (ta_mean + 17.8) * (ta_max - ta_min) ** 0.5 * 0.408 * ra
 
     return et0
+
+def get_elevation_and_latitude(lat, lon):
+    """
+    Returns the elevation (in meters) and latitude (in degrees) for a given set of coordinates.
+    Uses the Open Elevation API (https://open-elevation.com/) to obtain the elevation information.
+    """
+    # 'https://api.open-elevation.com/api/v1/lookup?locations=10,10|20,20|41.161758,-8.583933'
+    url = f'https://api.opentopodata.org/v1/aster30m?locations={lat},{lon}'
+    response = requests.get(url)
+    print(response.json())
+    data = response.json()
+    elevation = data['results'][0]['elevation']
+    #latitude = data['results'][0]['latitude']
+    return elevation

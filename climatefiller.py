@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.ensemble import IsolationForest
 from quantilesdetector import PercentileDetection
+from lib import *
 
 class ClimateFiller():
     """The ClimateFiller class
@@ -383,13 +384,13 @@ class ClimateFiller():
         et0_data.add_column('rg_mean', self.resample_timeseries(in_place=False)[global_solar_radiation_column_name])
         et0_data.index_to_column()
         et0_data.add_doy_column('date_time')
-        et0_data.add_one_value_column('elevation', DataFrame.get_elevation_and_latitude(latitude, longitude))
+        et0_data.add_one_value_column('elevation', get_elevation_and_latitude(latitude, longitude))
         et0_data.add_one_value_column('lat', latitude)
         
         if method == 'pm':
-            et0_data.add_column_based_on_function('et0_pm', DataFrame.et0_penman_monteith)
+            et0_data.add_column_based_on_function('et0_pm', et0_penman_monteith)
         elif method == 'hargreaves':
-            et0_data.add_column_based_on_function('et0_hargreaves', DataFrame.et0_hargreaves)
+            et0_data.add_column_based_on_function('et0_hargreaves', et0_hargreaves)
             
         if in_place == True:
             self.__dataframe = et0_data.get_dataframe()
@@ -620,7 +621,7 @@ class ClimateFiller():
         pass
 
 
-    def learn_error(self,):
+    """def learn_error(self,):
         data_x =
         data_y =
 
@@ -629,4 +630,4 @@ class ClimateFiller():
         model.train()
         
         for p in missing_data_row:
-            data.set_row('', model.predict(data.get_row))
+            data.set_row('', model.predict(data.get_row))"""
