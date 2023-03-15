@@ -374,14 +374,14 @@ class ClimateFiller():
                        ):
         
         et0_data = DataFrame()
-        et0_data.add_column('ta_mean', self.resample_timeseries(in_place=False)[air_temperture_column_name])
-        et0_data.add_column('ta_max', self.resample_timeseries(in_place=False, agg='max')[air_temperture_column_name])
-        et0_data.add_column('ta_min', self.resample_timeseries(in_place=False, agg='min')[air_temperture_column_name], )
-        et0_data.add_column('rh_max', self.resample_timeseries(in_place=False, agg='max')[air_relative_humidity_column_name])
-        et0_data.add_column('rh_min', self.resample_timeseries(in_place=False, agg='min')[air_relative_humidity_column_name])
-        et0_data.add_column('rh_mean', self.resample_timeseries(in_place=False)[air_relative_humidity_column_name])
-        et0_data.add_column('u2_mean', self.resample_timeseries(in_place=False)[wind_speed_column_name])
-        et0_data.add_column('rg_mean', self.resample_timeseries(in_place=False)[global_solar_radiation_column_name])
+        et0_data.add_column('ta_mean', self.data.resample_timeseries(in_place=False)[air_temperture_column_name])
+        et0_data.add_column('ta_max', self.data.resample_timeseries(in_place=False, agg='max')[air_temperture_column_name])
+        et0_data.add_column('ta_min', self.data.resample_timeseries(in_place=False, agg='min')[air_temperture_column_name], )
+        et0_data.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[air_relative_humidity_column_name])
+        et0_data.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[air_relative_humidity_column_name])
+        et0_data.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[air_relative_humidity_column_name])
+        et0_data.add_column('u2_mean', self.data.resample_timeseries(in_place=False)[wind_speed_column_name])
+        et0_data.add_column('rg_mean', self.data.resample_timeseries(in_place=False)[global_solar_radiation_column_name])
         et0_data.index_to_column()
         et0_data.add_doy_column('date_time')
         et0_data.add_one_value_column('elevation', get_elevation_and_latitude(latitude, longitude))
@@ -393,7 +393,7 @@ class ClimateFiller():
             et0_data.add_column_based_on_function('et0_hargreaves', et0_hargreaves)
             
         if in_place == True:
-            self.__dataframe = et0_data.get_dataframe()
+            self.data = et0_data
             
         return et0_data.get_dataframe()
     

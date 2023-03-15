@@ -9,11 +9,8 @@ def main():
     # Read the time series 
     data = DataFrame(r"E:\projects\data\r3_weather_data\r3_weather_data.xlsx", data_type='xls', sheet_name='2013_2020')
 
-    # Rename target colmn 
-    data.rename_columns({'air_temperature':'Ta'})
-
     # Initilize the ClimateFiller object
-    climate_filler = ClimateFiller(data.get_dataframe(), data_type='df', datetime_column_name='datetime')
+    climate_filler = ClimateFiller(data.get_dataframe(), data_type='df', datetime_column_name='date_time')
 
     # Replace missing values with 0
     climate_filler.et0_estimation('R3_Tair', 'R3_Rg', 'R3_Hr', 'R3_Vv')
