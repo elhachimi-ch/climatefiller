@@ -10,8 +10,8 @@ def main():
     # Initilize the ClimateFiller object
     climate_filler = ClimateFiller()
 
-    climate_filler.download('rs', '1951-01-01', '1999-12-31')
-    climate_filler.plot_column('rs')
+    climate_filler.download('ws', '2020-01-01', '2020-02-01')
+    climate_filler.plot_column('ws')
 
    
     print(time.time() - ti)

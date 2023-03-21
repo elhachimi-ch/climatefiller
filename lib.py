@@ -119,7 +119,10 @@ def get_elevation_and_latitude(lat, lon):
     #latitude = data['results'][0]['latitude']
     return elevation
 
-def get_2m_wind_speed(uz, vz, z=10):
+def get_2m_wind_speed(row):
+    
+    uz, vz, z = row['u10'], row['v10'], 10
+    
     # calculate 10m wind speed magnitude
     wsz = math.sqrt(math.pow(uz, 2) + math.pow(vz, 2))
     

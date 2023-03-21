@@ -174,7 +174,7 @@ class ClimateFiller():
                                     longitude
                                 ],
                             },
-                            'era5_r3_' + column_to_fill_name + '_' + str(p) + '_' + str(y) + '_' + month + '.grib')
+                            'data/era5_r3_' + column_to_fill_name + '_' + str(p) + '_' + str(y) + '_' + month + '.grib')
                     
         
         gis = GIS()
@@ -228,28 +228,29 @@ class ClimateFiller():
             data_v10 = DataFrame()
             for year in missing_data_dates:
                 for month in missing_data_dates[year]['month']:
-                    data_t2m.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + '2m_temperature' + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                    data_u10.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + '10m_u_component_of_wind' + '_' + str(year) + '_' + month + ".grib", "ta"),)
             for year in missing_data_dates:
                 for month in missing_data_dates[year]['month']:
-                    data_d2m.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + '2m_dewpoint_temperature' + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                    data_v10.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + '10m_v_component_of_wind' + '_' + str(year) + '_' + month + ".grib", "ta"),)
             
             data_u10.reset_index()
             data_u10.reindex_dataframe("valid_time")
-            data_u10.keep_columns(['d2m'])
+            data_u10.keep_columns(['u10'])
             data_v10.reset_index()
             data_v10.reindex_dataframe("valid_time")
-            data_v10.keep_columns(['t2m'])
-            data_v10.join(data_d2m.get_dataframe())
+            data_v10.keep_columns(['v10'])
+            data_v10.join(data_u10.get_dataframe())
             data = data_v10
-            data.missing_data('t2m')
-            data.add_column_based_on_function()
-            data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
-            data.missing_data('era5_hr')
+            data.add_column_based_on_function('era5_ws', get_2m_wind_speed)
             nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
+            data.missing_data('u10')
+            data.export('data/ws.csv', index=True)
+            self.data.export('data/ws2.csv', index=True)
             for p in nan_indices:
-                self.data.set_row('rh', p, data.get_row(p)['era5_hr'])
+                self.data.set_row('ws', p, data.get_row(p)['era5_ws'])
             
-            print('Imputation of missing data for rh from ERA5-Land was done!')
+            print('Imputation of missing data for wind speed from ERA5-Land was done!')
+            
         elif column_to_fill_name == 'rs':
             for year in missing_data_dates:
                 for month in missing_data_dates[year]['month']:
@@ -505,6 +506,8 @@ class ClimateFiller():
                 era5_land_variables = ['2m_temperature', '2m_dewpoint_temperature']
             elif variable == 'rs':
                 era5_land_variables = ['surface_solar_radiation_downwards']
+            elif variable == 'ws':
+                era5_land_variables = ['10m_u_component_of_wind', '10m_v_component_of_wind']
                 
             from data_science_toolkit.gis import GIS
             import cdsapi
@@ -526,9 +529,6 @@ class ClimateFiller():
             pass
         else:
             pass
-    
-    def reference_evapotranspiration(self, climate_variables_path='data/in_situ_data.xls', data_type='xls', method='pm'):
-        pass
     
     def export(self, path_link='data/climate_ts.csv', data_type='csv'):
         self.data.export(path_link, data_type)
