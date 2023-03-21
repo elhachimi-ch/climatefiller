@@ -1,4 +1,3 @@
-from data_science_toolkit.gis import GIS
 from data_science_toolkit.dataframe import DataFrame
 import datetime
 import os
@@ -14,10 +13,13 @@ class ClimateFiller():
     """The ClimateFiller class
     """
     
-    def __init__(self, data_link='data.csv', data_type='csv', datetime_column_name='date_time', date_time_format='%Y-%m-%d %H:%M:%S', machine_learning_enabled=False):
-        self.data = DataFrame(data_link=data_link, data_type=data_type)
-        self.data.column_to_date(datetime_column_name, date_time_format)
-        self.datetime_column_name = datetime_column_name
+    def __init__(self, data_link=None, data_type='csv', datetime_column_name='date_time', date_time_format='%Y-%m-%d %H:%M:%S', machine_learning_enabled=False):
+        if data_link is None:
+            self.data = DataFrame()
+        else:
+            self.data = DataFrame(data_link=data_link, data_type=data_type)
+            self.data.column_to_date(datetime_column_name, date_time_format)
+            self.datetime_column_name = datetime_column_name
         
     def show(self, number_of_row=None):
         if number_of_row is None:
@@ -31,7 +33,7 @@ class ClimateFiller():
         pass
     
     def recursive_fill(self, column_to_fill_name='ta', 
-                              variable='Ta', 
+                              variable='ta', 
                               latitude=31.66749781,
                               longitude=-7.593311291):
         if self.missing_data_checking(column_to_fill_name) == 0:
@@ -77,11 +79,11 @@ class ClimateFiller():
             print('No missing data found in ' + column_to_fill_name)
             return
         
-        if variable == 'Ta':
+        if variable == 'ta':
             era5_land_variables = ['2m_temperature']
-        elif variable == 'Hr':
+        elif variable == 'rh':
             era5_land_variables = ['2m_temperature', '2m_dewpoint_temperature']
-        elif variable == 'Rg':
+        elif variable == 'rs':
             era5_land_variables = ['surface_solar_radiation_downwards']
             
         from data_science_toolkit.gis import GIS
@@ -146,7 +148,7 @@ class ClimateFiller():
                         'era5_r3_' + column_to_fill_name + '_' + str(y) + '_' + month + '.grib')
                 else:
                     for p in era5_land_variables:
-                        if os.path.exists("E:\projects\pythonsnippets\era5_r3_" + column_to_fill_name + '_' + str(p) + '_' + str(y) + '_' + month + '.grib') is False:
+                        if os.path.exists("data\era5_r3_" + column_to_fill_name + '_' + str(p) + '_' + str(y) + '_' + month + '.grib') is False:
                             c.retrieve(
                             'reanalysis-era5-land',
                             {
@@ -176,10 +178,10 @@ class ClimateFiller():
         gis = GIS()
         data = DataFrame()
         
-        if column_to_fill_name == 'Ta':
+        if column_to_fill_name == 'ta':
             for year in missing_data_dates:
                 for month in missing_data_dates[year]['month']:
-                    data.append_dataframe(gis.get_era5_land_grib_as_dataframe("E:\projects\pythonsnippets\era5_r3_" + column_to_fill_name + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                    data.append_dataframe(gis.get_era5_land_grib_as_dataframe("data/" + column_to_fill_name + '_' + str(year) + '_' + month + ".grib", "ta"),)
                     
             data.reset_index()
             data.reindex_dataframe("valid_time")
@@ -187,10 +189,10 @@ class ClimateFiller():
             data.transform_column('t2m', 't2m', lambda o: o - 273.15)
             nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
             for p in nan_indices:
-                self.data.set_row('Ta', p, data.get_row(p)['t2m'])
-            print('Imputation of missing data for Ta from ERA5-Land was done!')
+                self.data.set_row('ta', p, data.get_row(p)['t2m'])
+            print('Imputation of missing data for ta from ERA5-Land was done!')
             
-        elif column_to_fill_name == 'Hr':
+        elif column_to_fill_name == 'rh':
             data_t2m = DataFrame()
             data_d2m = DataFrame()
             for year in missing_data_dates:
@@ -215,10 +217,10 @@ class ClimateFiller():
             data.missing_data('era5_hr')
             nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
             for p in nan_indices:
-                self.data.set_row('Hr', p, data.get_row(p)['era5_hr'])
+                self.data.set_row('rh', p, data.get_row(p)['era5_hr'])
             
-            print('Imputation of missing data for Hr from ERA5-Land was done!')
-        elif column_to_fill_name == 'Rg':
+            print('Imputation of missing data for rh from ERA5-Land was done!')
+        elif column_to_fill_name == 'rs':
             for year in missing_data_dates:
                 for month in missing_data_dates[year]['month']:
                     data.append_dataframe(gis.get_era5_land_grib_as_dataframe("E:\projects\pythonsnippets\era5_r3_" + column_to_fill_name + '_' + str(year) + '_' + month + ".grib", "ta"),)
@@ -247,9 +249,9 @@ class ClimateFiller():
             data.export('rg.csv', index=True)
             nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
             for p in nan_indices:
-                self.data.set_row('Rg', p, data.get_row(p)['ssrd'])
+                self.data.set_row('rs', p, data.get_row(p)['ssrd'])
             
-            print('Imputation of missing data for Rg from ERA5-Land was done!')
+            print('Imputation of missing data for rs from ERA5-Land was done!')
     
 
     def missing_data_checking(self, column_name=None, verbose=True):
@@ -422,7 +424,7 @@ class ClimateFiller():
         self.data.filter_dataframe(column_name, constraint)
     
     def missing_data(self, drop_row_if_nan_in_column=None, filling_dict_colmn_val=None, method='ffill',
-                     column_to_fill='Ta', date_column_name=None):
+                     column_to_fill='ta', date_column_name=None):
         """Function Name: missing_data
 
             Description:
@@ -434,7 +436,7 @@ class ClimateFiller():
             drop_row_if_nan_in_column: (optional) the name of a column in the dataframe. If provided, the function will drop rows where this column contains NaN values. Default value is None.
             filling_dict_colmn_val: (optional) a dictionary containing column names and values to be used to fill missing data in those columns. The keys of the dictionary should be the names of the columns to be filled, and the values should be the values to use for filling. Default value is None.
             method: (optional) a string that determines the method used for filling missing data. Possible values are 'ffill' for forward filling, 'bfill' for backward filling, or 'interpolate' for linear interpolation. Default value is 'ffill'.
-            column_to_fill: (optional) the name of the column to be filled. This parameter is only used when method is set to 'ffill' or 'bfill'. Default value is 'Ta'.
+            column_to_fill: (optional) the name of the column to be filled. This parameter is only used when method is set to 'ffill' or 'bfill'. Default value is 'ta'.
             date_column_name: (optional) the name of the column in the dataframe that contains the date-time information. This parameter is only used when method is set to 'interpolate'. Default value is None.
             Returns:
             A dataframe with missing values filled or dropped according to the specified parameters.
@@ -468,11 +470,11 @@ class ClimateFiller():
     longitude=-7.593311291,
     product='era5-Land'):
         if product == 'era5-Land':
-            if variable == 'Ta':
+            if variable == 'ta':
                 era5_land_variables = ['2m_temperature']
-            elif variable == 'Hr':
+            elif variable == 'rh':
                 era5_land_variables = ['2m_temperature', '2m_dewpoint_temperature']
-            elif variable == 'Rg':
+            elif variable == 'rs':
                 era5_land_variables = ['surface_solar_radiation_downwards']
                 
             from data_science_toolkit.gis import GIS
@@ -480,12 +482,19 @@ class ClimateFiller():
             c = cdsapi.Client()
 
             # create the target time series
-            target_time_series = datetime.datetime()
+            target_time_series = DataFrame.generate_datetime_range(start_datetime, end_datetime)
+            
+            self.data.set_dataframe_index(target_time_series)
+            self.data.add_one_value_column(variable, None)
+            self.data.index_to_column()
+            self.fill(variable, variable, 'index',)
+            
+            print(self.show())
 
-            for y in target_time_series.years:
+            """for y in target_time_series.years:
                 for month in target_time_series.months:
                     if len(era5_land_variables) == 1:
-                        if os.path.exists("E:\projects\pythonsnippets\era5_r3_" + column_to_fill_name + '_' + str(y) + '_' + month + '.grib') is False:
+                        if os.path.exists("E:\projects\pythonsnippets\era5_r3_" + variable + '_' + str(y) + '_' + month + '.grib') is False:
                             c.retrieve(
                             'reanalysis-era5-land',
                             {
@@ -536,13 +545,13 @@ class ClimateFiller():
                                         longitude
                                     ],
                                 },
-                                'era5_r3_' + column_to_fill_name + '_' + str(p) + '_' + str(y) + '_' + month + '.grib')
+                                'era5_r3_' + column_to_fill_name + '_' + str(p) + '_' + str(y) + '_' + month + '.grib')"""
                         
             
             gis = GIS()
             data = DataFrame()
             
-            if column_to_fill_name == 'Ta':
+            if column_to_fill_name == 'ta':
                 for year in target_time_series.years:
                     for month in target_time_series.months:
                         data.append_dataframe(gis.get_era5_land_grib_as_dataframe("E:\projects\pythonsnippets\era5_r3_" + column_to_fill_name + '_' + str(year) + '_' + month + ".grib", "ta"),)
@@ -552,7 +561,7 @@ class ClimateFiller():
                 data.missing_data('t2m')
                 data.transform_column('t2m', 't2m', lambda o: o - 273.15)
                 
-            elif column_to_fill_name == 'Hr':
+            elif column_to_fill_name == 'rh':
                 data_t2m = DataFrame()
                 data_d2m = DataFrame()
                 for year in missing_data_dates:
@@ -577,10 +586,10 @@ class ClimateFiller():
                 data.missing_data('era5_hr')
                 nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
                 for p in nan_indices:
-                    self.data.set_row('Hr', p, data.get_row(p)['era5_hr'])
+                    self.data.set_row('rh', p, data.get_row(p)['era5_hr'])
                 
-                print('Imputation of missing data for Hr from ERA5-Land was done!')
-            elif column_to_fill_name == 'Rg':
+                print('Imputation of missing data for rh from ERA5-Land was done!')
+            elif column_to_fill_name == 'rs':
                 for year in missing_data_dates:
                     for month in missing_data_dates[year]['month']:
                         data.append_dataframe(gis.get_era5_land_grib_as_dataframe("E:\projects\pythonsnippets\era5_r3_" + column_to_fill_name + '_' + str(year) + '_' + month + ".grib", "ta"),)
@@ -609,9 +618,9 @@ class ClimateFiller():
                 data.export('rg.csv', index=True)
                 nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
                 for p in nan_indices:
-                    self.data.set_row('Rg', p, data.get_row(p)['ssrd'])
+                    self.data.set_row('rs', p, data.get_row(p)['ssrd'])
                 
-                print('Imputation of missing data for Rg from ERA5-Land was done!')
+                print('Imputation of missing data for rs from ERA5-Land was done!')
         elif product == 'mera':
             pass
         else:
