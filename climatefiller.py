@@ -85,6 +85,9 @@ class ClimateFiller():
             era5_land_variables = ['2m_temperature', '2m_dewpoint_temperature']
         elif variable == 'rs':
             era5_land_variables = ['surface_solar_radiation_downwards']
+        elif variable == 'ws':
+            era5_land_variables = ['10m_u_component_of_wind', '10m_v_component_of_wind']
+            
             
         from data_science_toolkit.gis import GIS
         import cdsapi
@@ -99,7 +102,6 @@ class ClimateFiller():
                 indexes.append(datetime.datetime.strptime(p, '%Y-%m-%d %H:%M:%S'))
             else:
                 indexes.append(p)
-            
             
         years = set()
         for p in indexes:
@@ -220,6 +222,34 @@ class ClimateFiller():
                 self.data.set_row('rh', p, data.get_row(p)['era5_hr'])
             
             print('Imputation of missing data for rh from ERA5-Land was done!')
+            
+        elif column_to_fill_name == 'ws':
+            data_u10 = DataFrame()
+            data_v10 = DataFrame()
+            for year in missing_data_dates:
+                for month in missing_data_dates[year]['month']:
+                    data_t2m.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + '2m_temperature' + '_' + str(year) + '_' + month + ".grib", "ta"),)
+            for year in missing_data_dates:
+                for month in missing_data_dates[year]['month']:
+                    data_d2m.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + '2m_dewpoint_temperature' + '_' + str(year) + '_' + month + ".grib", "ta"),)
+            
+            data_u10.reset_index()
+            data_u10.reindex_dataframe("valid_time")
+            data_u10.keep_columns(['d2m'])
+            data_v10.reset_index()
+            data_v10.reindex_dataframe("valid_time")
+            data_v10.keep_columns(['t2m'])
+            data_v10.join(data_d2m.get_dataframe())
+            data = data_v10
+            data.missing_data('t2m')
+            data.add_column_based_on_function()
+            data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
+            data.missing_data('era5_hr')
+            nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
+            for p in nan_indices:
+                self.data.set_row('rh', p, data.get_row(p)['era5_hr'])
+            
+            print('Imputation of missing data for rh from ERA5-Land was done!')
         elif column_to_fill_name == 'rs':
             for year in missing_data_dates:
                 for month in missing_data_dates[year]['month']:
@@ -240,13 +270,12 @@ class ClimateFiller():
                         
                     new_value = (data.get_row(p)['ssrd'] - previous_hour)/3600
                 l.append(new_value)
-            data.add_column(l, 'rg')
-            data.keep_columns(['rg'])
-            data.rename_columns({'rg': 'ssrd'})
+            data.add_column('rs', l)
+            data.keep_columns(['rs'])
+            data.rename_columns({'rs': 'ssrd'})
             print(data.show())
             
             data.transform_column('ssrd', 'ssrd', lambda o : o if abs(o) < 1500 else 0 )    
-            data.export('rg.csv', index=True)
             nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
             for p in nan_indices:
                 self.data.set_row('rs', p, data.get_row(p)['ssrd'])
@@ -400,7 +429,7 @@ class ClimateFiller():
         return et0_data.get_dataframe()
     
     def apply_quality_control_criteria(self, variable_column_name, decision_func=lambda x:x>0):
-        self.data.add_column(self.data.get_column(variable_column_name).apply(decision_func), 'decision')
+        self.data.add_column('decision', self.data.get_column(variable_column_name).apply(decision_func))
         self.data.get_dataframe().loc[ self.data.get_dataframe()['decision'] == False, variable_column_name] = None
         self.data.drop_column('decision')
         
@@ -500,6 +529,9 @@ class ClimateFiller():
     
     def reference_evapotranspiration(self, climate_variables_path='data/in_situ_data.xls', data_type='xls', method='pm'):
         pass
+    
+    def export(self, path_link='data/climate_ts.csv', data_type='csv'):
+        self.data.export(path_link, data_type)
 
 
     """def learn_error(self,):
