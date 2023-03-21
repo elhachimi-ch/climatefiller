@@ -244,8 +244,7 @@ class ClimateFiller():
             data.add_column_based_on_function('era5_ws', get_2m_wind_speed)
             nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
             data.missing_data('u10')
-            data.export('data/ws.csv', index=True)
-            self.data.export('data/ws2.csv', index=True)
+            data.missing_data('era5_ws')
             for p in nan_indices:
                 self.data.set_row('ws', p, data.get_row(p)['era5_ws'])
             
@@ -522,7 +521,7 @@ class ClimateFiller():
             self.data.add_one_value_column(variable, None)
             self.data.index_to_column()
             self.fill(variable, variable, 'index',)
-            
+            self.export()
             print(self.show())
             
         elif product == 'mera':
