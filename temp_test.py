@@ -12,7 +12,7 @@ def main():
     data.keep_columns(['R3_Tair', 'DateBis'])
 
     # Rename target colmn 
-    data.rename_columns({'R3_Tair':'ta'})
+    data.rename_columns({'R3_Tair':'ta'}) 
 
     # Initilize the ClimateFiller object
     climate_filler = ClimateFiller(data.get_dataframe(), data_type='df', datetime_column_name='DateBis')
