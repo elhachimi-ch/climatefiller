@@ -7,13 +7,15 @@ import matplotlib.pyplot as plt
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.ensemble import IsolationForest
 from quantilesdetector import PercentileDetection
-from lib import *
+from lib import Lib
+
 
 class ClimateFiller():
     """The ClimateFiller class
     """
     
     def __init__(self, data_link=None, data_type='csv', datetime_column_name='date_time', date_time_format='%Y-%m-%d %H:%M:%S', machine_learning_enabled=False):
+        self.datetime_column_name = datetime_column_name
         if data_link is None:
             self.data = DataFrame()
         else:
@@ -51,8 +53,6 @@ class ClimateFiller():
                                                                                  longitude))
     
     def fill(self, column_to_fill_name='ta', 
-                              variable='air_temperature', 
-                              datetime_column_name='date_time',
                               latitude=31.66749781,
                               longitude=-7.593311291
                               ):
@@ -79,13 +79,13 @@ class ClimateFiller():
             print('No missing data found in ' + column_to_fill_name)
             return
         
-        if variable == 'ta':
+        if column_to_fill_name == 'ta':
             era5_land_variables = ['2m_temperature']
-        elif variable == 'rh':
+        elif column_to_fill_name == 'rh':
             era5_land_variables = ['2m_temperature', '2m_dewpoint_temperature']
-        elif variable == 'rs':
+        elif column_to_fill_name == 'rs':
             era5_land_variables = ['surface_solar_radiation_downwards']
-        elif variable == 'ws':
+        elif column_to_fill_name == 'ws':
             era5_land_variables = ['10m_u_component_of_wind', '10m_v_component_of_wind']
             
             
@@ -93,8 +93,8 @@ class ClimateFiller():
         import cdsapi
         c = cdsapi.Client()
 
-        if datetime_column_name is not None:
-            self.data.reindex_dataframe(datetime_column_name)
+        if self.datetime_column_name is not None:
+            self.data.reindex_dataframe(self.datetime_column_name)
 
         indexes = []
         for p in self.data.get_missing_data_indexes_in_column(column_to_fill_name):
@@ -281,6 +281,8 @@ class ClimateFiller():
                 self.data.set_row('rs', p, data.get_row(p)['ssrd'])
             
             print('Imputation of missing data for rs from ERA5-Land was done!')
+        
+        self.data.index_to_column()
     
 
     def missing_data_checking(self, column_name=None, verbose=True):
@@ -328,7 +330,7 @@ class ClimateFiller():
     def anomaly_detection(self, climate_varibale_column='Air temperature', method='knn', ):
         pass
     
-    def eliminate_outliers(self, climate_varibale_column_name='ta', method='lof', n_neighbors=48, contamination=0.005):
+    def eliminate_outliers(self, climate_varibale_column_name='ta', method='lof', n_neighbors=48, contamination=0.005, n_estimators=100):
         """Function Name: eliminate_outliers
 
             Description:
@@ -351,24 +353,22 @@ class ClimateFiller():
             outliers_model = LocalOutlierFactor(n_neighbors=n_neighbors, contamination=contamination)
             self.data.get_dataframe()['inlier'] = outliers_model.fit_predict(self.data.get_columns([climate_varibale_column_name]))
             print('Number of detected outliers: {}'.format(self.data.count_occurence_of_each_row('inlier').iloc[0]))
-            self.data.get_dataframe().loc[self.data.get_dataframe()['inlier'] == -1, climate_varibale_column_name] = None
+            self.data.dataframe.loc[self.data.get_dataframe()['inlier'] == -1, climate_varibale_column_name] = None
             self.data.drop_column('inlier')
-            #self.data.set_dataframe(self.data.get_dataframe().loc[self.data.get_dataframe().inlier == 1,
+        
         elif method == 'isolation_forest':
-            outliers_model = IsolationForest(contamination=contamination, random_state=42)
+            outliers_model = IsolationForest(contamination=contamination, n_estimators=n_estimators, random_state=42)
             self.data.get_dataframe()['inlier'] = outliers_model.fit_predict(self.data.get_columns([climate_varibale_column_name]))
             print('Number of detected outliers: {}'.format(self.data.count_occurence_of_each_row('inlier').iloc[0]))
-            self.data.get_dataframe().loc[self.data.get_dataframe()['inlier'] == -1, climate_varibale_column_name] = 2000
+            self.data.dataframe.loc[self.data.get_dataframe()['inlier'] == -1, climate_varibale_column_name] = 2000
             self.data.drop_column('inlier')
-            #self.data.set_dataframe(self.data.get_dataframe().loc[self.data.get_dataframe().inlier == 1,
+        
         elif method == 'quantiles':
             outliers_model = LocalOutlierFactor(n_neighbors=n_neighbors, contamination=contamination)
             self.data.get_dataframe()['inlier'] = outliers_model.fit_predict(self.data.get_columns([climate_varibale_column_name]))
             print('Number of detected outliers: {}'.format(self.data.count_occurence_of_each_row('inlier').iloc[0]))
-            self.data.get_dataframe().loc[self.data.get_dataframe()['inlier'] == -1, climate_varibale_column_name] = None
+            self.data.dataframe.loc[self.data.get_dataframe()['inlier'] == -1, climate_varibale_column_name] = None
             self.data.drop_column('inlier')
-            #self.data.set_dataframe(self.data.get_dataframe().loc[self.data.get_dataframe().inlier == 1,
-                                                       # self.data.get_dataframe().columns.tolist()]) 
     
     def evaluate_products(self):
         pass
