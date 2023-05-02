@@ -241,7 +241,7 @@ class ClimateFiller():
             data_v10.keep_columns(['v10'])
             data_v10.join(data_u10.get_dataframe())
             data = data_v10
-            data.add_column_based_on_function('era5_ws', get_2m_wind_speed)
+            data.add_column_based_on_function('era5_ws', Lib.get_2m_wind_speed)
             nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
             data.missing_data('u10')
             data.missing_data('era5_ws')
