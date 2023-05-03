@@ -1,1 +1,0 @@
-data.get_dataframe(), data_type='df', datetime_column_name='date_time'
