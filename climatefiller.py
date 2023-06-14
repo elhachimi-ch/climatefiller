@@ -9,22 +9,13 @@ from sklearn.neighbors import LocalOutlierFactor
 from sklearn.ensemble import IsolationForest
 from quantilesdetector import PercentileDetection
 from lib import Lib
-<<<<<<< HEAD
-import ee
-import geemap
-=======
->>>>>>> 7f2bc2e1892b5b8b73823c7e9c0c57a1d3e2946d
 
 
 class ClimateFiller():
     """The ClimateFiller class
     """
     
-<<<<<<< HEAD
-    def __init__(self, data_link=None, data_type='csv', datetime_column_name='datetime', date_time_format='%Y-%m-%d %H:%M:%S', machine_learning_enabled=False):
-=======
     def __init__(self, data_link=None, data_type='csv', datetime_column_name='date_time', date_time_format='%Y-%m-%d %H:%M:%S', machine_learning_enabled=False):
->>>>>>> 7f2bc2e1892b5b8b73823c7e9c0c57a1d3e2946d
         self.datetime_column_name = datetime_column_name
         if data_link is None:
             self.data = DataFrame()
@@ -63,10 +54,6 @@ class ClimateFiller():
                                                                                  longitude))
     
     def fill(self, column_to_fill_name='ta', 
-<<<<<<< HEAD
-                              longitude=-7.593311291,
-=======
->>>>>>> 7f2bc2e1892b5b8b73823c7e9c0c57a1d3e2946d
                               latitude=31.66749781,
                               ):
         """Function Name: fill
