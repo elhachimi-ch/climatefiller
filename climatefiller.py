@@ -1,4 +1,5 @@
-from data_science_toolkit.dataframe import DataFrame
+from gis import GIS
+from dataframe import DataFrame
 import datetime
 import os
 from datetime import timedelta
@@ -7,13 +8,17 @@ import matplotlib.pyplot as plt
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.ensemble import IsolationForest
 from quantilesdetector import PercentileDetection
-from lib import *
+from lib import Lib
+import ee
+import geemap
+
 
 class ClimateFiller():
     """The ClimateFiller class
     """
     
-    def __init__(self, data_link=None, data_type='csv', datetime_column_name='date_time', date_time_format='%Y-%m-%d %H:%M:%S', machine_learning_enabled=False):
+    def __init__(self, data_link=None, data_type='csv', datetime_column_name='datetime', date_time_format='%Y-%m-%d %H:%M:%S', machine_learning_enabled=False):
+        self.datetime_column_name = datetime_column_name
         if data_link is None:
             self.data = DataFrame()
         else:
@@ -51,10 +56,8 @@ class ClimateFiller():
                                                                                  longitude))
     
     def fill(self, column_to_fill_name='ta', 
-                              variable='air_temperature', 
-                              datetime_column_name='date_time',
+                              longitude=-7.593311291,
                               latitude=31.66749781,
-                              longitude=-7.593311291
                               ):
         """Function Name: fill
 
@@ -79,13 +82,13 @@ class ClimateFiller():
             print('No missing data found in ' + column_to_fill_name)
             return
         
-        if variable == 'ta':
+        if column_to_fill_name == 'ta':
             era5_land_variables = ['2m_temperature']
-        elif variable == 'rh':
+        elif column_to_fill_name == 'rh':
             era5_land_variables = ['2m_temperature', '2m_dewpoint_temperature']
-        elif variable == 'rs':
+        elif column_to_fill_name == 'rs':
             era5_land_variables = ['surface_solar_radiation_downwards']
-        elif variable == 'ws':
+        elif column_to_fill_name == 'ws':
             era5_land_variables = ['10m_u_component_of_wind', '10m_v_component_of_wind']
             
             
@@ -93,8 +96,8 @@ class ClimateFiller():
         import cdsapi
         c = cdsapi.Client()
 
-        if datetime_column_name is not None:
-            self.data.reindex_dataframe(datetime_column_name)
+        if self.datetime_column_name is not None:
+            self.data.reindex_dataframe(self.datetime_column_name)
 
         indexes = []
         for p in self.data.get_missing_data_indexes_in_column(column_to_fill_name):
@@ -281,6 +284,8 @@ class ClimateFiller():
                 self.data.set_row('rs', p, data.get_row(p)['ssrd'])
             
             print('Imputation of missing data for rs from ERA5-Land was done!')
+        
+        self.data.index_to_column()
     
 
     def missing_data_checking(self, column_name=None, verbose=True):
@@ -328,7 +333,7 @@ class ClimateFiller():
     def anomaly_detection(self, climate_varibale_column='Air temperature', method='knn', ):
         pass
     
-    def eliminate_outliers(self, climate_varibale_column_name='ta', method='lof', n_neighbors=48, contamination=0.005):
+    def eliminate_outliers(self, climate_varibale_column_name='ta', method='lof', n_neighbors=48, contamination=0.005, n_estimators=100):
         """Function Name: eliminate_outliers
 
             Description:
@@ -351,24 +356,22 @@ class ClimateFiller():
             outliers_model = LocalOutlierFactor(n_neighbors=n_neighbors, contamination=contamination)
             self.data.get_dataframe()['inlier'] = outliers_model.fit_predict(self.data.get_columns([climate_varibale_column_name]))
             print('Number of detected outliers: {}'.format(self.data.count_occurence_of_each_row('inlier').iloc[0]))
-            self.data.get_dataframe().loc[self.data.get_dataframe()['inlier'] == -1, climate_varibale_column_name] = None
+            self.data.dataframe.loc[self.data.get_dataframe()['inlier'] == -1, climate_varibale_column_name] = None
             self.data.drop_column('inlier')
-            #self.data.set_dataframe(self.data.get_dataframe().loc[self.data.get_dataframe().inlier == 1,
+        
         elif method == 'isolation_forest':
-            outliers_model = IsolationForest(contamination=contamination, random_state=42)
+            outliers_model = IsolationForest(contamination=contamination, n_estimators=n_estimators, random_state=42)
             self.data.get_dataframe()['inlier'] = outliers_model.fit_predict(self.data.get_columns([climate_varibale_column_name]))
             print('Number of detected outliers: {}'.format(self.data.count_occurence_of_each_row('inlier').iloc[0]))
-            self.data.get_dataframe().loc[self.data.get_dataframe()['inlier'] == -1, climate_varibale_column_name] = 2000
+            self.data.dataframe.loc[self.data.get_dataframe()['inlier'] == -1, climate_varibale_column_name] = 2000
             self.data.drop_column('inlier')
-            #self.data.set_dataframe(self.data.get_dataframe().loc[self.data.get_dataframe().inlier == 1,
+        
         elif method == 'quantiles':
             outliers_model = LocalOutlierFactor(n_neighbors=n_neighbors, contamination=contamination)
             self.data.get_dataframe()['inlier'] = outliers_model.fit_predict(self.data.get_columns([climate_varibale_column_name]))
             print('Number of detected outliers: {}'.format(self.data.count_occurence_of_each_row('inlier').iloc[0]))
-            self.data.get_dataframe().loc[self.data.get_dataframe()['inlier'] == -1, climate_varibale_column_name] = None
+            self.data.dataframe.loc[self.data.get_dataframe()['inlier'] == -1, climate_varibale_column_name] = None
             self.data.drop_column('inlier')
-            #self.data.set_dataframe(self.data.get_dataframe().loc[self.data.get_dataframe().inlier == 1,
-                                                       # self.data.get_dataframe().columns.tolist()]) 
     
     def evaluate_products(self):
         pass
@@ -415,13 +418,13 @@ class ClimateFiller():
         et0_data.add_column('rg_mean', self.data.resample_timeseries(in_place=False)[global_solar_radiation_column_name])
         et0_data.index_to_column()
         et0_data.add_doy_column('date_time')
-        et0_data.add_one_value_column('elevation', get_elevation_and_latitude(latitude, longitude))
+        et0_data.add_one_value_column('elevation', Lib.get_elevation_and_latitude(latitude, longitude))
         et0_data.add_one_value_column('lat', latitude)
         
         if method == 'pm':
-            et0_data.add_column_based_on_function('et0_pm', et0_penman_monteith)
+            et0_data.add_column_based_on_function('et0_pm', Lib.et0_penman_monteith)
         elif method == 'hargreaves':
-            et0_data.add_column_based_on_function('et0_hargreaves', et0_hargreaves)
+            et0_data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
             
         if in_place == True:
             self.data = et0_data
@@ -493,36 +496,458 @@ class ClimateFiller():
 
     def download(self, 
     variable, 
-    start_datetime,
-    end_datetime,
+    start_date='2021-01-01',
+    end_date='2021-02-01',
     latitude=31.66749781,
     longitude=-7.593311291,
-    product='era5-Land'):
+    product='era5-Land',
+    backend=None):
         if product == 'era5-Land':
-            if variable == 'ta':
-                era5_land_variables = ['2m_temperature']
-            elif variable == 'rh':
-                era5_land_variables = ['2m_temperature', '2m_dewpoint_temperature']
-            elif variable == 'rs':
-                era5_land_variables = ['surface_solar_radiation_downwards']
-            elif variable == 'ws':
-                era5_land_variables = ['10m_u_component_of_wind', '10m_v_component_of_wind']
+            
+            
+            if backend == 'gee':
+                ee.Initialize()
                 
-            from data_science_toolkit.gis import GIS
-            import cdsapi
-            c = cdsapi.Client()
-            
+                point = ee.Geometry.Point(longitude, latitude)
+                era5_land = ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY').filterBounds(point)
+                
+                # Convert the start date and end date to datetime objects
+                start_datetime = datetime.datetime.strptime(start_date, '%Y-%m-%d')
+                end_datetime = datetime.datetime.strptime(end_date, '%Y-%m-%d')
+                
+                data = DataFrame()
+                
+                if variable == 'ta':
+                    era5_land_variables = ['temperature_2m']
+                    
+                    # Check if the time span is longer than one year
+                    if (end_datetime - start_datetime).days > 365:
+                        # Iterate over each year in the time span
+                        for year in range(start_datetime.year, end_datetime.year + 1):
+                            # Define the start and end dates for each year
+                            year_start_date = datetime.datetime(year, 1, 1)
+                            year_end_date = datetime.datetime(year, 12, 31)
 
-            if len(self.data.get_dataframe()) == 0:
-                # create the target time series
-                target_time_series = DataFrame.generate_datetime_range(start_datetime, end_datetime)
-                self.data.set_dataframe_index(target_time_series)
-            
-            self.data.add_one_value_column(variable, None)
-            self.data.index_to_column()
-            self.fill(variable, variable, 'index',)
-            self.export()
-            print(self.show())
+                            # Filter the ERA5 land dataset by the year's date range
+                            era5_land_filtered = era5_land \
+                                .filterDate(year_start_date, year_end_date) \
+                                .select(era5_land_variables)
+
+                            # Download or perform further processing for the data for each year
+                            # Convert the image collection to a feature collection
+                            feature_collection = era5_land_filtered.map(lambda image: image.reduceRegions(reducer=ee.Reducer.first(), collection=ee.FeatureCollection(point)))
+
+                            # Flatten the feature collection
+                            flattened_collection = feature_collection.flatten()
+
+                            task = ee.batch.Export.table.toDrive( 
+                                collection=flattened_collection,
+                                description='ERA5_Land_Data',
+                                fileFormat='CSV',
+                                folder = 'era5_land_data'
+                            )
+                            task.start()
+                        
+                            output_file = 'data/' + '_'.join([variable, str(longitude), str(latitude), str(year)]) + '.csv'
+                            
+                            # Export the TS to Loccal from Google Drive
+                            geemap.ee_export_vector(flattened_collection , filename=output_file)
+                            print('The dataset has been exported to: ', output_file)
+                            
+                            temp_data = DataFrame(output_file)
+                            temp_data.rename_columns({'first': 't2m'})
+                            temp_data.transform_column('t2m', 't2m', lambda o: o - 273.15)
+                            temp_data.export(output_file)
+                            data.append_dataframe(temp_data.get_dataframe())
+                        
+                        output_file = 'data/' + '_'.join([variable, str(longitude), str(latitude), str(start_date), str(end_date)]) + '.csv'
+                        
+                        data.rename_columns({'system:index': 'datetime'})
+                        data.column_to_date('datetime', extraction_func=self.extract_datetime)
+                        data.reindex_dataframe('datetime')
+                        data.select_datetime_range(start_date, end_datetime)
+                        data.export(output_file, index=True) 
+                        print('The final dataset has been exported to: ', output_file)
+                        
+
+                    else:
+                        # Filter the ERA5 land dataset by the year's date range
+                        era5_land_filtered = era5_land \
+                            .filterDate(start_date, end_date) \
+                            .select(era5_land_variables)
+
+                        # Convert the image collection to a feature collection
+                        feature_collection = era5_land_filtered.map(lambda image: image.reduceRegions(reducer=ee.Reducer.first(), collection=ee.FeatureCollection(point)))
+
+                        # Flatten the feature collection
+                        flattened_collection = feature_collection.flatten()
+
+                        task = ee.batch.Export.table.toDrive( 
+                            collection=flattened_collection,
+                            description='ERA5_Land_Data',
+                            fileFormat='CSV',
+                            folder = 'era5_land_data'
+                        )
+                        task.start()
+                    
+                        output_file = 'data/' + '_'.join([variable, str(longitude), str(latitude), str(start_date), str(end_date)]) + '.csv'
+                        
+                        # Export the TS to Loccal from Google Drive
+                        geemap.ee_export_vector(flattened_collection , filename=output_file)
+                        print('The dataset has been exported to: ', output_file)
+                        
+                        data = DataFrame(output_file)
+                        data.rename_columns({'first': 't2m'})
+                        data.transform_column('t2m', 't2m', lambda o: o - 273.15)
+                        data.rename_columns({'system:index': 'datetime'})
+                        data.column_to_date('datetime', extraction_func=self.extract_datetime)
+                        data.reindex_dataframe('datetime')
+                        data.select_datetime_range(start_date, end_datetime)
+                        data.export(output_file)
+                    
+                elif variable == 'rh':
+                    era5_land_variables = ['temperature_2m', 'dewpoint_temperature_2m']
+
+
+                    # Check if the time span is longer than one year
+                    if (end_datetime - start_datetime).days > 365:
+                        # Iterate over each year in the time span
+                        for year in range(start_datetime.year, end_datetime.year + 1):
+                            # Define the start and end dates for each year
+                            year_start_date = datetime.datetime(year, 1, 1)
+                            year_end_date = datetime.datetime(year, 12, 31)
+
+                            # Filter the ERA5 land dataset by the year's date range
+                            era5_land_filtered = era5_land \
+                                .filterDate(year_start_date, year_end_date) \
+                                .select(era5_land_variables)
+
+                            # Download or perform further processing for the data for each year
+                            # Convert the image collection to a feature collection
+                            feature_collection = era5_land_filtered.map(lambda image: image.reduceRegions(reducer=ee.Reducer.first(), collection=ee.FeatureCollection(point)))
+
+                            # Flatten the feature collection
+                            flattened_collection = feature_collection.flatten()
+
+                            task = ee.batch.Export.table.toDrive( 
+                                collection=flattened_collection,
+                                description='ERA5_Land_Data',
+                                fileFormat='CSV',
+                                folder = 'era5_land_data'
+                            )
+                            task.start()
+                        
+                            output_file = 'data/' + '_'.join([variable, str(longitude), str(latitude), str(year)]) + '.csv'
+                            
+                            # Export the TS to Loccal from Google Drive
+                            geemap.ee_export_vector(flattened_collection , filename=output_file)
+                            print('The dataset has been exported to: ', output_file)
+                            
+                            temp_data = DataFrame(output_file)
+                            temp_data.rename_columns({'temperature_2m': 't2m', 'dewpoint_temperature_2m': 'd2m'})
+                            temp_data.transform_column('t2m', 't2m', lambda o: o - 273.15)
+                            temp_data.transform_column('d2m', 'd2m', lambda o: o - 273.15)
+                            temp_data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
+                            temp_data.drop_columns(['t2m', 'd2m'])
+                            temp_data.export(output_file)
+                            data.append_dataframe(temp_data.get_dataframe())
+                        
+                        output_file = 'data/' + '_'.join([variable, str(longitude), str(latitude), str(start_date), str(end_date)]) + '.csv'
+                        
+                        data.rename_columns({'system:index': 'datetime'})
+                        data.column_to_date('datetime', extraction_func=self.extract_datetime)
+                        data.reindex_dataframe('datetime')
+                        data.select_datetime_range(start_date, end_datetime)
+                        data.export(output_file, index=True) 
+                        print('The final dataset has been exported to: ', output_file)
+                        
+
+                    else:
+                        # Filter the ERA5 land dataset by the year's date range
+                        era5_land_filtered = era5_land \
+                            .filterDate(start_date, end_date) \
+                            .select(era5_land_variables)
+
+                        # Convert the image collection to a feature collection
+                        feature_collection = era5_land_filtered.map(lambda image: image.reduceRegions(reducer=ee.Reducer.first(), collection=ee.FeatureCollection(point)))
+
+                        # Flatten the feature collection
+                        flattened_collection = feature_collection.flatten()
+
+                        task = ee.batch.Export.table.toDrive( 
+                            collection=flattened_collection,
+                            description='ERA5_Land_Data',
+                            fileFormat='CSV',
+                            folder = 'era5_land_data'
+                        )
+                        task.start()
+                    
+                        output_file = 'data/' + '_'.join([variable, str(longitude), str(latitude), str(start_date), str(end_date)]) + '.csv'
+                        
+                        # Export the TS to Loccal from Google Drive
+                        geemap.ee_export_vector(flattened_collection , filename=output_file)
+                        print('The dataset has been exported to: ', output_file)
+                        
+                        data = DataFrame(output_file)
+                        data.rename_columns({'temperature_2m': 't2m', 'dewpoint_temperature_2m': 'd2m'})
+                        data.transform_column('t2m', 't2m', lambda o: o - 273.15)
+                        data.transform_column('d2m', 'd2m', lambda o: o - 273.15)
+                        data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
+                        data.drop_columns(['t2m', 'd2m'])
+                        data.export(output_file)
+                elif variable == 'rs':
+                    era5_land_variables = ['surface_solar_radiation_downwards']
+
+
+                    # Check if the time span is longer than one year
+                    if (end_datetime - start_datetime).days > 365:
+                        # Iterate over each year in the time span
+                        for year in range(start_datetime.year, end_datetime.year + 1):
+                            # Define the start and end dates for each year
+                            year_start_date = datetime.datetime(year, 1, 1)
+                            year_end_date = datetime.datetime(year, 12, 31)
+
+                            # Filter the ERA5 land dataset by the year's date range
+                            era5_land_filtered = era5_land \
+                                .filterDate(year_start_date, year_end_date) \
+                                .select(era5_land_variables)
+
+                            # Download or perform further processing for the data for each year
+                            # Convert the image collection to a feature collection
+                            feature_collection = era5_land_filtered.map(lambda image: image.reduceRegions(reducer=ee.Reducer.first(), collection=ee.FeatureCollection(point)))
+
+                            # Flatten the feature collection
+                            flattened_collection = feature_collection.flatten()
+
+                            task = ee.batch.Export.table.toDrive( 
+                                collection=flattened_collection,
+                                description='ERA5_Land_Data',
+                                fileFormat='CSV',
+                                folder = 'era5_land_data'
+                            )
+                            task.start()
+                        
+                            output_file = 'data/' + '_'.join([variable, str(longitude), str(latitude), str(year)]) + '.csv'
+                            
+                            # Export the TS to Loccal from Google Drive
+                            geemap.ee_export_vector(flattened_collection , filename=output_file)
+                            print('The dataset has been exported to: ', output_file)
+                            
+                            temp_data = DataFrame(output_file)
+                            temp_data.rename_columns({'first': 'ssrd'})
+                            temp_data.transform_column('ssrd', 'ssrd', lambda o: o - 273.15)
+                            data.append_dataframe(temp_data.get_dataframe())
+                        
+                        output_file = 'data/' + '_'.join([variable, str(longitude), str(latitude), str(start_date), str(end_date)]) + '.csv'
+                        
+                        data.rename_columns({'system:index': 'datetime'})
+                        data.column_to_date('datetime', extraction_func=self.extract_datetime)
+                        data.reindex_dataframe('datetime')
+                        
+                        l = []
+                        for p in data.get_index():
+                            if p.hour == 1:
+                                new_value = data.get_row(p)['ssrd']/3600
+                            else:
+                                try:
+                                    previous_hour = data.get_row(p-timedelta(hours=1))['ssrd']
+                                except KeyError: # if age is not convertable to int
+                                    previous_hour = data.get_row(p)['ssrd']
+                                    
+                                new_value = (data.get_row(p)['ssrd'] - previous_hour)/3600
+                            l.append(new_value)
+                        data.add_column('rs', l)
+                        data.keep_columns(['rs'])
+                        data.rename_columns({'rs': 'ssrd'})
+                        print(data.show())
+                        
+                        data.transform_column('ssrd', 'ssrd', lambda o : o if abs(o) < 1500 else 0 )  
+                        data.select_datetime_range(start_date, end_datetime)
+                        data.export(output_file, index=True) 
+                        print('The final dataset has been exported to: ', output_file)
+                        
+
+                    else:
+                        # Filter the ERA5 land dataset by the year's date range
+                        era5_land_filtered = era5_land \
+                            .filterDate(start_date, end_date) \
+                            .select(era5_land_variables)
+
+                        # Convert the image collection to a feature collection
+                        feature_collection = era5_land_filtered.map(lambda image: image.reduceRegions(reducer=ee.Reducer.first(), collection=ee.FeatureCollection(point)))
+
+                        # Flatten the feature collection
+                        flattened_collection = feature_collection.flatten()
+
+                        task = ee.batch.Export.table.toDrive( 
+                            collection=flattened_collection,
+                            description='ERA5_Land_Data',
+                            fileFormat='CSV',
+                            folder = 'era5_land_data'
+                        )
+                        task.start()
+                    
+                        output_file = 'data/' + '_'.join([variable, str(longitude), str(latitude), str(start_date), str(end_date)]) + '.csv'
+                        
+                        # Export the TS to Loccal from Google Drive
+                        geemap.ee_export_vector(flattened_collection , filename=output_file)
+                        print('The dataset has been exported to: ', output_file)
+                        
+                        data = DataFrame(output_file)
+                        data.rename_columns({'first': 'ssrd'})
+                        
+                        data.rename_columns({'system:index': 'datetime'})
+                        data.column_to_date('datetime', extraction_func=self.extract_datetime)
+                        data.reindex_dataframe('datetime')
+                        
+                        l = []
+                        for p in data.get_index():
+                            if p.hour == 1:
+                                new_value = data.get_row(p)['ssrd']/3600
+                            else:
+                                try:
+                                    previous_hour = data.get_row(p-timedelta(hours=1))['ssrd']
+                                except KeyError: # if age is not convertable to int
+                                    previous_hour = data.get_row(p)['ssrd']
+                                    
+                                new_value = (data.get_row(p)['ssrd'] - previous_hour)/3600
+                            l.append(new_value)
+                        data.add_column('rs', l)
+                        data.keep_columns(['rs'])
+                        data.rename_columns({'rs': 'ssrd'})
+                        print(data.show())
+                        
+                        data.transform_column('ssrd', 'ssrd', lambda o : o if abs(o) < 1500 else 0 )  
+                        data.select_datetime_range(start_date, end_datetime)
+                        data.export(output_file, index=True) 
+                        print('The final dataset has been exported to: ', output_file)
+                        
+                elif variable == 'ws':
+                    era5_land_variables = ['u_component_of_wind_10m', 'v_component_of_wind_10m']
+
+
+                    # Check if the time span is longer than one year
+                    if (end_datetime - start_datetime).days > 365:
+                        # Iterate over each year in the time span
+                        for year in range(start_datetime.year, end_datetime.year + 1):
+                            # Define the start and end dates for each year
+                            year_start_date = datetime.datetime(year, 1, 1)
+                            year_end_date = datetime.datetime(year, 12, 31)
+
+                            # Filter the ERA5 land dataset by the year's date range
+                            era5_land_filtered = era5_land \
+                                .filterDate(year_start_date, year_end_date) \
+                                .select(era5_land_variables)
+
+                            # Download or perform further processing for the data for each year
+                            # Convert the image collection to a feature collection
+                            feature_collection = era5_land_filtered.map(lambda image: image.reduceRegions(reducer=ee.Reducer.first(), collection=ee.FeatureCollection(point)))
+
+                            # Flatten the feature collection
+                            flattened_collection = feature_collection.flatten()
+
+                            task = ee.batch.Export.table.toDrive( 
+                                collection=flattened_collection,
+                                description='ERA5_Land_Data',
+                                fileFormat='CSV',
+                                folder = 'era5_land_data'
+                            )
+                            task.start()
+                        
+                            output_file = 'data/' + '_'.join([variable, str(longitude), str(latitude), str(year)]) + '.csv'
+                            
+                            # Export the TS to Loccal from Google Drive
+                            geemap.ee_export_vector(flattened_collection , filename=output_file)
+                            print('The dataset has been exported to: ', output_file)
+                            
+                            temp_data = DataFrame(output_file)
+                            
+                            temp_data.rename_columns({'u_component_of_wind_10m': 'u10', 'v_component_of_wind_10m': 'v10'})
+                            temp_data.add_column_based_on_function('era5_ws', Lib.get_2m_wind_speed)
+                            temp_data.drop_columns(['u10', 'v10'])
+                            temp_data.export(output_file)
+                            data.append_dataframe(temp_data.get_dataframe())
+                        
+                        output_file = 'data/' + '_'.join([variable, str(longitude), str(latitude), str(start_date), str(end_date)]) + '.csv'
+                        
+                        data.rename_columns({'system:index': 'datetime'})
+                        data.column_to_date('datetime', extraction_func=self.extract_datetime)
+                        data.reindex_dataframe('datetime')
+                        data.select_datetime_range(start_date, end_datetime)
+                        data.export(output_file, index=True) 
+                        print('The final dataset has been exported to: ', output_file)
+                        
+
+                    else:
+                        # Filter the ERA5 land dataset by the year's date range
+                        era5_land_filtered = era5_land \
+                            .filterDate(start_date, end_date) \
+                            .select(era5_land_variables)
+
+                        # Convert the image collection to a feature collection
+                        feature_collection = era5_land_filtered.map(lambda image: image.reduceRegions(reducer=ee.Reducer.first(), collection=ee.FeatureCollection(point)))
+
+                        # Flatten the feature collection
+                        flattened_collection = feature_collection.flatten()
+
+                        task = ee.batch.Export.table.toDrive( 
+                            collection=flattened_collection,
+                            description='ERA5_Land_Data',
+                            fileFormat='CSV',
+                            folder = 'era5_land_data'
+                        )
+                        task.start()
+                    
+                        output_file = 'data/' + '_'.join([variable, str(longitude), str(latitude), str(start_date), str(end_date)]) + '.csv'
+                        
+                        # Export the TS to Loccal from Google Drive
+                        geemap.ee_export_vector(flattened_collection , filename=output_file)
+                        print('The dataset has been exported to: ', output_file)
+                        
+                        data = DataFrame(output_file)
+                        data.rename_columns({'u_component_of_wind_10m': 'u10', 'v_component_of_wind_10m': 'v10'})
+                        data.add_column_based_on_function('era5_ws', Lib.get_2m_wind_speed)
+                        data.drop_columns(['u10', 'v10'])
+                        data.rename_columns({'system:index': 'datetime'})
+                        data.column_to_date('datetime', extraction_func=self.extract_datetime)
+                        data.reindex_dataframe('datetime')
+                        data.select_datetime_range(start_date, end_datetime)
+                        data.export(output_file, index=True)
+                        
+                        
+                        
+                
+                
+
+                
+
+            else:
+                
+                if variable == 'ta':
+                    era5_land_variables = ['2m_temperature']
+                elif variable == 'rh':
+                    era5_land_variables = ['2m_temperature', '2m_dewpoint_temperature']
+                elif variable == 'rs':
+                    era5_land_variables = ['surface_solar_radiation_downwards']
+                elif variable == 'ws':
+                    era5_land_variables = ['10m_u_component_of_wind', '10m_v_component_of_wind']
+                
+                    
+                from data_science_toolkit.gis import GIS
+                import cdsapi
+                c = cdsapi.Client()
+                
+
+                if len(self.data.get_dataframe()) == 0:
+                    # create the target time series
+                    target_time_series = DataFrame.generate_datetime_range(start_datetime, end_datetime)
+                    self.data.set_dataframe_index(target_time_series)
+                    self.data.rename_index('datetime')
+                    self.data.index_to_column()
+                
+                self.data.add_one_value_column(variable, None)
+                self.fill(variable, longitude, latitude)
+                self.export()
             
         elif product == 'mera':
             pass
@@ -531,6 +956,29 @@ class ClimateFiller():
     
     def export(self, path_link='data/climate_ts.csv', data_type='csv'):
         self.data.export(path_link, data_type)
+        
+    
+    @staticmethod
+    def extract_datetime(row):
+        import re
+
+        # Example string
+        date_string = row
+
+        # Define the regular expression pattern
+        pattern = r'(\d{4})(\d{2})(\d{2})T(\d{2})_(\d{1})'
+
+        # Match and extract the date components using the pattern
+        match = re.match(pattern, date_string)
+
+        # Extract the date components from the match
+        year = int(match.group(1))
+        month = int(match.group(2))
+        day = int(match.group(3))
+        hour = int(match.group(4))
+        minute = int(match.group(5))
+        
+        return datetime.datetime(year, month, day, hour, minute)
 
 
     """def learn_error(self,):
