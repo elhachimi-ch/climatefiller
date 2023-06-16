@@ -1,5 +1,5 @@
-from gis import GIS
-from dataframe import DataFrame
+from data_science_toolkit.gis import GIS
+from data_science_toolkit.dataframe import DataFrame
 import datetime
 import os
 from datetime import timedelta
