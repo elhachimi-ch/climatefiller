@@ -11,13 +11,35 @@ from quantilesdetector import PercentileDetection
 from lib import Lib
 import ee
 import geemap
+import re
 
 
 class ClimateFiller():
     """The ClimateFiller class
     """
     
-    def __init__(self, data_link=None, data_type='csv', datetime_column_name='datetime', date_time_format='%Y-%m-%d %H:%M:%S', machine_learning_enabled=False):
+    def __init__(self, data_link=None, data_type='csv', datetime_column_name='datetime', date_time_format='%Y-%m-%d %H:%M:%S'):
+        """
+        Initializes an instance of the class with the specified parameters.
+
+        Args:
+            self (object): The instance of the class.
+            data_link (str or None): A string representing the link or path to the data source. Defaults to None.
+            data_type (str): The type of the data source. Defaults to 'csv'.
+            datetime_column_name (str): The name of the column that contains datetime information. Defaults to 'datetime'.
+            date_time_format (str): The format of the datetime values in the data source. Defaults to '%Y-%m-%d %H:%M:%S'.
+
+        Returns:
+            None
+
+        Notes:
+            - The initialization of the class instance allows for handling and processing of the data.
+            - The data_link parameter specifies the location of the data source, which can be a link or a local path.
+            - The data_type parameter indicates the format or type of the data source, with 'csv' as the default value.
+            - The datetime_column_name parameter identifies the column in the data source that contains datetime information.
+            - The date_time_format parameter defines the format of the datetime values in the data source.
+            - If data_link is not provided, the instance will be initialized without any data source.
+        """
         self.datetime_column_name = datetime_column_name
         if data_link is None:
             self.data = DataFrame()
@@ -27,6 +49,22 @@ class ClimateFiller():
             self.datetime_column_name = datetime_column_name
         
     def show(self, number_of_row=None):
+        """
+        Displays a specified number of rows from the data source.
+
+        Args:
+            self (object): The instance of the class.
+            number_of_row (int or None, optional): The number of rows to display. Defaults to None.
+
+        Returns:
+            None
+
+        Notes:
+            - The show method is used to visualize a specified number of rows from the data source.
+            - If the number_of_row parameter is not provided, all available rows will be displayed.
+            - The displayed rows provide a preview or snapshot of the data in the data source.
+        """
+        
         if number_of_row is None:
             return self.data.get_dataframe()
         elif number_of_row < 0:
@@ -34,13 +72,23 @@ class ClimateFiller():
         else:
             return self.data.get_dataframe().head(number_of_row)
     
-    def download_era5_land_dataframe(self):
-        pass
-    
     def recursive_fill(self, column_to_fill_name='ta', 
                               variable='ta', 
                               latitude=31.66749781,
                               longitude=-7.593311291):
+        
+        """
+        Recursively fills missing values in the specified column using a specified variable and coordinates.
+
+        Args:
+            column_to_fill_name (str): The name of the column to fill. Defaults to 'ta'.
+            variable (str): The variable to use for filling missing values. Defaults to 'ta'.
+            latitude (float): The latitude coordinate to use for filling missing values. Defaults to 31.66749781.
+            longitude (float): The longitude coordinate to use for filling missing values. Defaults to -7.593311291.
+
+        Returns:
+            None
+        """
         if self.missing_data_checking(column_to_fill_name) == 0:
             print("No missing data found.")
         elif self.missing_data_checking(column_to_fill_name) > 1000:
@@ -58,26 +106,32 @@ class ClimateFiller():
     def fill(self, column_to_fill_name='ta', 
                               longitude=-7.593311291,
                               latitude=31.66749781,
+                              product="era5_Land",
+                              machine_learning_enabled=False,
+                              backend=None
                               ):
-        """Function Name: fill
+        """
+        Fills missing values in the specified column using data retrieval and optionally machine learning techniques.
 
-            Description:
-            This function fills missing values in a column of a dataframe with values from a weather API using latitude, longitude, and date-time information.
+        Args:
+            self (object): The instance of the class.
+            column_to_fill_name (str): The name of the column to fill. Defaults to 'ta'.
+            longitude (float): The longitude coordinate to use for data retrieval. Defaults to -7.593311291.
+            latitude (float): The latitude coordinate to use for data retrieval. Defaults to 31.66749781.
+            product (str): The data product to retrieve for filling missing values. Defaults to "era5_Land".
+            machine_learning_enabled (bool): Whether to use machine learning techniques for filling missing values. Defaults to False.
+            backend (str or None): The backend to use for data retrieval. Defaults to None.
 
-            Parameters:
+        Returns:
+            None
 
-            self: the instance of the class that the function is a part of.
-            column_to_fill_name: (optional) the name of the column in the dataframe that will be filled with the weather data. Default value is 'ta'.
-            variable: (optional) the name of the weather variable to be queried from the API. Default value is 'air_temperature'.
-            datetime_column_name: (optional) the name of the column in the dataframe that contains the date-time information. Default value is 'date_time'.
-            latitude: (optional) the latitude of the location for which weather data is being queried. Default value is 31.66749781.
-            longitude: (optional) the longitude of the location for which weather data is being queried. Default value is -7.593311291.
-            Returns:
-            None. The function modifies the dataframe in place, filling in missing values with data from the weather API.
-
-            Note:
-            This function assumes that the dataframe already contains a column with the date-time information in the format YYYY-MM-DD HH:MM:SS. The function also requires an API key for the weather API, which must be set as an attribute of the class instance before calling the function. The API key can be obtained by registering for an account with the weather API provider.
-                    """
+        Notes:
+            - Missing values in the specified column will be replaced with appropriate data retrieved from the specified coordinates.
+            - The data product specified will be used to retrieve relevant data for filling missing values.
+            - The option to enable machine learning techniques allows for more sophisticated filling strategies.
+            - If the backend is not specified, the method will use the default backend associated with the class.
+            - The effectiveness of the filling process may depend on the data availability and the chosen backend.
+        """
         if self.missing_data_checking(column_to_fill_name, verbose=False) == 0:
             print('No missing data found in ' + column_to_fill_name)
             return
@@ -330,27 +384,37 @@ class ClimateFiller():
         if verbose is False:
             return miss
     
-    def anomaly_detection(self, climate_varibale_column='Air temperature', method='knn', ):
-        pass
-    
     def eliminate_outliers(self, climate_varibale_column_name='ta', method='lof', n_neighbors=48, contamination=0.005, n_estimators=100):
-        """Function Name: eliminate_outliers
+        """
+        Eliminates outliers in the specified climate variable column using the specified outlier detection method.
 
-            Description:
-            This function eliminates outliers from a column of a dataframe using the Local Outlier Factor (LOF) algorithm, the Isolation Forest algorithm or quantiles.
+        Args:
+            self (object): The instance of the class.
+            climate_variable_column_name (str): The name of the climate variable column to eliminate outliers from.
+                Defaults to 'ta'.
 
-            Parameters:
+            method (str): The outlier detection method to use. Currently supported methods include:
+                - 'lof': Local Outlier Factor algorithm, which measures the local deviation of a data point
+                with respect to its neighbors. Defaults to 'lof'.
 
-            self: the instance of the class that the function is a part of.
-            climate_varibale_column_name: (optional) the name of the column in the dataframe that contains the climate variable. Default value is 'ta'.
-            method: (optional) the name of the algorithm used to identify outliers. Possible values are 'lof' for Local Outlier Factor, and 'isolation_forest' for Isolation Forest. Default value is 'lof'.
-            n_neighbors: (optional) the number of neighbors to consider when calculating the LOF score. This parameter is only used when method is set to 'lof'. Default value is 48.
-            contamination: (optional) the proportion of outliers in the dataset. This parameter is only used when method is set to 'isolation_forest'. Default value is 0.005.
-            Returns:
-            A dataframe that contains the original data with the identified outliers removed.
+            n_neighbors (int): The number of neighbors to consider for outlier detection.
+                This parameter is only applicable to certain outlier detection methods. Defaults to 48.
 
-            Note:
-            This function assumes that the dataframe has already been loaded into the class instance. If the LOF algorithm is used, this function requires the scikit-learn library to be installed. If the Isolation Forest algorithm is used, this function requires the PyOD library to be installed.
+            contamination (float): The expected proportion of outliers in the data.
+                This parameter is only applicable to certain outlier detection methods. Defaults to 0.005.
+
+            n_estimators (int): The number of base estimators to use for ensemble-based outlier detection methods.
+                This parameter is only applicable to certain outlier detection methods. Defaults to 100.
+
+        Returns:
+            None
+
+        Notes:
+            - Outliers are data points that significantly deviate from the majority of the data.
+            - The specified climate variable column will be processed to identify and eliminate outliers.
+            - The chosen outlier detection method will be applied to identify and mark outliers in the data.
+            - The method aims to improve the quality and reliability of the climate variable data by removing outliers.
+            - The effectiveness and performance of the outlier elimination process may vary depending on the method and parameters used.
         """
         if method == 'lof':
             outliers_model = LocalOutlierFactor(n_neighbors=n_neighbors, contamination=contamination)
@@ -406,6 +470,33 @@ class ClimateFiller():
                        method='pm',
                        in_place=True
                        ):
+        """
+        Estimates reference evapotranspiration (ET0) using the specified meteorological data and method.
+
+        Args:
+            self (object): The instance of the class.
+            air_temperature_column_name (str): The name of the column that contains air temperature data. Defaults to 'ta'.
+            global_solar_radiation_column_name (str): The name of the column that contains global solar radiation data. Defaults to 'rs'.
+            air_relative_humidity_column_name (str): The name of the column that contains air relative humidity data. Defaults to 'rh'.
+            wind_speed_column_name (str): The name of the column that contains wind speed data. Defaults to 'ws'.
+            date_time_column_name (str): The name of the column that contains date and time information. Defaults to 'date_time'.
+            latitude (float): The latitude coordinate of the location for ET0 estimation. Defaults to 31.65410805.
+            longitude (float): The longitude coordinate of the location for ET0 estimation. Defaults to -7.603140831.
+            method (str): The method to use for ET0 estimation. Currently supported methods include:
+                - 'pm': Penman-Monteith method, which is based on the FAO56 Penman-Monteith equation. Defaults to 'pm'.
+            in_place (bool): Whether to replace the original ET0 column in the dataset or create a new column. Defaults to True.
+
+        Returns:
+            None
+
+        Notes:
+            - ET0 estimation is a measure of the potential evapotranspiration from a reference crop.
+            - The method utilizes meteorological data such as air temperature, global solar radiation, air relative humidity, and wind speed.
+            - The specified columns in the dataset will be used for ET0 estimation.
+            - The latitude and longitude coordinates define the location for ET0 estimation.
+            - The chosen method will be applied to calculate ET0 values.
+            - If in_place is True, the original ET0 column will be replaced; otherwise, a new column will be created.
+        """
         
         et0_data = DataFrame()
         et0_data.add_column('ta_mean', self.data.resample_timeseries(in_place=False)[air_temperture_column_name])
@@ -432,6 +523,27 @@ class ClimateFiller():
         return et0_data.get_dataframe()
     
     def apply_quality_control_criteria(self, variable_column_name, decision_func=lambda x:x>0):
+        """
+        Applies quality control criteria to the specified variable column based on a decision function.
+
+        Args:
+            self (object): The instance of the class.
+            variable_column_name (str): The name of the column containing the variable to apply quality control to.
+            decision_func (function, optional): The decision function used to determine if a value passes quality control.
+                Defaults to lambda x: x > 0, which checks if the value is greater than zero.
+
+        Returns:
+            None
+
+        Notes:
+            - The apply_quality_control_criteria method is used to perform quality control on a variable column.
+            - The specified variable_column_name is the column in the dataset that will undergo quality control.
+            - The decision_func parameter allows customization of the quality control criteria by providing a decision function.
+            - The decision function should take a value as input and return True if it passes quality control, False otherwise.
+            - Values in the variable column that do not meet the quality control criteria will be marked or processed accordingly.
+            - The quality control process helps identify and handle data points that may be inaccurate, erroneous, or outliers.
+        """
+        
         self.data.add_column('decision', self.data.get_column(variable_column_name).apply(decision_func))
         self.data.get_dataframe().loc[ self.data.get_dataframe()['decision'] == False, variable_column_name] = None
         self.data.drop_column('decision')
@@ -502,6 +614,32 @@ class ClimateFiller():
     longitude=-7.593311291,
     product='era5-Land',
     backend=None):
+        """
+        Downloads meteorological data for the specified variable and spatiotemporal range.
+
+        Args:
+            self (object): The instance of the class.
+            variable (str): The variable to download meteorological data for.
+            start_date (str): The start date of the spatiotemporal range in 'YYYY-MM-DD' format. Defaults to '2021-01-01'.
+            end_date (str): The end date of the spatiotemporal range in 'YYYY-MM-DD' format. Defaults to '2021-02-01'.
+            latitude (float): The latitude coordinate for the data download. Defaults to 31.66749781.
+            longitude (float): The longitude coordinate for the data download. Defaults to -7.593311291.
+            product (str): The product or dataset to download data from. Defaults to 'era5-Land'.
+            backend (str or None): The backend to use for data retrieval. Defaults to None.
+
+        Returns:
+            None
+
+        Notes:
+            - The download method is used to retrieve meteorological data for a specific variable.
+            - The variable parameter specifies the variable of interest, such as temperature, precipitation, etc.
+            - The start_date and end_date parameters define the spatiotemporal range to download data for.
+            - The latitude and longitude coordinates specify the location for data retrieval.
+            - The product parameter identifies the specific dataset or product to download data from.
+            - If the backend is not specified, the method will use the default backend associated with the class.
+            - The downloaded data can be used for further analysis, processing, or visualization.
+            - The availability of data and the chosen backend may affect the success of the download process.
+        """
         if product == 'era5-Land':
             
             
@@ -955,12 +1093,45 @@ class ClimateFiller():
             pass
     
     def export(self, path_link='data/climate_ts.csv', data_type='csv'):
+        """
+        Exports the processed data to a specified file or location.
+
+        Args:
+            self (object): The instance of the class.
+            path_link (str): The path or link to export the processed data. Defaults to 'data/climate_ts.csv'.
+            data_type (str): The type of the exported data. Defaults to 'csv'.
+
+        Returns:
+            None
+
+        Notes:
+            - The export method is used to save the processed data to a file or location.
+            - The path_link parameter specifies the destination path or link for the exported data.
+            - The data_type parameter indicates the format or type of the exported data, with 'csv' as the default value.
+            - The processed data will be saved according to the specified file format and location.
+            - The exported data can be used for further analysis, sharing, or storage.
+        """
         self.data.export(path_link, data_type)
         
     
     @staticmethod
     def extract_datetime(row):
-        import re
+        """
+        Extracts the datetime value from a row of data.
+
+        Args:
+            row (object): A row of data from which the datetime value will be extracted.
+
+        Returns:
+            datetime: The extracted datetime value.
+
+        Notes:
+            - The extract_datetime static method is used to extract the datetime value from a row of data.
+            - The row parameter represents a single row of data, which can be an object or a dictionary-like structure.
+            - The method extracts and returns the datetime value from the specified row.
+            - The datetime value is typically used for time-based operations, analysis, or visualization.
+        """
+        
 
         # Example string
         date_string = row
