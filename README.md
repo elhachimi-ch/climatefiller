@@ -6,6 +6,8 @@
 
 ClimateFiller is a python framework that implements various data-driven methods to make manipulating in-situ climate time series easier. It offers various services such as (1) automating gap-filling (2) using machine learning and ERA5-Land for bias correction (3) using Isolation Forest, Local Outlier Factor, and quantiles to detect and eliminate outliers. It was tested on several Automatic Weather Stations (AWS) installed in Morocco.
 
+DISCLAIMER:
+Please note that this project is currently in the BETA stage and will remain experimental for the foreseeable future. As a result, there is a high probability of Classes, methods names, and other functionalities undergoing modifications.
 
 ## Simple Demo
 
