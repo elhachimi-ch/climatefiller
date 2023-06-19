@@ -1078,7 +1078,7 @@ class ClimateFiller():
 
                 if len(self.data.get_dataframe()) == 0:
                     # create the target time series
-                    target_time_series = DataFrame.generate_datetime_range(start_datetime, end_datetime)
+                    target_time_series = DataFrame.generate_datetime_range(start_date, end_date)
                     self.data.set_dataframe_index(target_time_series)
                     self.data.rename_index('datetime')
                     self.data.index_to_column()

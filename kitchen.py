@@ -11,10 +11,12 @@ def main():
     
     climate_filler = ClimateFiller()
     
+    # -8.87,32.56,
+    climate_filler.download('ta', longitude=-8.87, latitude=32.56, start_date='2020-01-01', end_date='2022-07-01', backend='gee')
     #climate_filler.download('ta', backend='gee', start_date='2000-05-01', end_date='2002-05-01') 
     #climate_filler.download('rs', backend='gee', start_date='2001-01-01', end_date='2001-01-05') 
     #climate_filler.download('ws', backend='gee', start_date='2000-05-01', end_date='2001-07-01') 
-    climate_filler.download('rh', backend='gee', start_date='2000-05-01', end_date='2001-07-01') 
+    #climate_filler.download('rh', backend='gee', start_date='2000-05-01', end_date='2001-07-01') 
 
     # Rename target colmn 
     #data.rename_columns({'air_temperature':'Ta'})
