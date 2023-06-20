@@ -17,8 +17,6 @@ import sys
 root_path = os.path.dirname(os.path.abspath('.'))
 sys.path.insert(0, root_path)
 
-print(root_path)
-
 extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.napoleon',
