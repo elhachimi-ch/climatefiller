@@ -467,11 +467,10 @@ class ClimateFiller():
                        global_solar_radiation_column_name='rs',
                        air_relative_humidity_column_name='rh',
                        wind_speed_column_name='ws',
-                       date_time_column_name='date_time',
                        latitude=31.65410805,
                        longitude=-7.603140831,
                        method='pm',
-                       in_place=True
+                       verbose=False
                        ):
         """
         Estimates reference evapotranspiration (ET0) using the specified meteorological data and method.
@@ -511,7 +510,7 @@ class ClimateFiller():
         et0_data.add_column('u2_mean', self.data.resample_timeseries(in_place=False)[wind_speed_column_name])
         et0_data.add_column('rg_mean', self.data.resample_timeseries(in_place=False)[global_solar_radiation_column_name])
         et0_data.index_to_column()
-        et0_data.add_doy_column('date_time')
+        et0_data.add_doy_column('datetime')
         et0_data.add_one_value_column('elevation', Lib.get_elevation_and_latitude(latitude, longitude))
         et0_data.add_one_value_column('lat', latitude)
         
@@ -520,10 +519,12 @@ class ClimateFiller():
         elif method == 'hargreaves':
             et0_data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
             
-        if in_place == True:
-            self.data = et0_data
+        self.data.set_dataframe(et0_data.get_dataframe())
+        
+        if verbose is True:
+            print(et0_data.get_dataframe())
             
-        return et0_data.get_dataframe()
+        return self.data.get_dataframe()
     
     def apply_quality_control_criteria(self, variable_column_name, decision_func=lambda x:x>0):
         """
@@ -616,6 +617,7 @@ class ClimateFiller():
     start_date='2021-01-01',
     end_date='2021-02-01',
     product='era5-Land',
+    sequential_downloading=False
     ):
         """
         Downloads meteorological data for the specified variable and spatiotemporal range.
@@ -658,7 +660,7 @@ class ClimateFiller():
                 if variable == 'ta':
                     era5_land_variables = ['temperature_2m']
                     
-                    self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date)
+                    self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
                     
                     for year in range(start_date.year, end_date.year + 1):
                         cache_path = 'data/cache/' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
@@ -675,13 +677,20 @@ class ClimateFiller():
                         data.transform_column('t2m', lambda o: o - 273.15)
                         data.column_to_date('datetime')
                         data.reindex_dataframe('datetime')
+                        end_date += timedelta(1)
                         data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
-                        data.export(output_file, index=True) 
+                        data.export(output_file, index=True)
+                        
+                        if sequential_downloading is True:
+                            if self.data.is_empty():
+                                self.data.set_dataframe(data.get_dataframe())
+                            else:
+                                self.data.join(data.get_dataframe())
                     
                 elif variable == 'rh':
                     era5_land_variables = ['temperature_2m', 'dewpoint_temperature_2m']
                     
-                    self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date)
+                    self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
                     
                     for year in range(start_date.year, end_date.year + 1):
                         cache_path = 'data/cache/' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
@@ -701,13 +710,20 @@ class ClimateFiller():
                         data.drop_columns(['t2m', 'd2m'])
                         data.column_to_date('datetime')
                         data.reindex_dataframe('datetime')
+                        end_date += timedelta(1)
                         data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
                         data.export(output_file, index=True)
+                        
+                        if sequential_downloading is True:
+                            if self.data.is_empty():
+                                self.data.set_dataframe(data.get_dataframe())
+                            else:
+                                self.data.join(data.get_dataframe())
 
                 elif variable == 'rs':
                     era5_land_variables = ['surface_solar_radiation_downwards']
 
-                    self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date)
+                    self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
                     
                     for year in range(start_date.year, end_date.year + 1):
                         cache_path = 'data/cache/' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
@@ -740,14 +756,20 @@ class ClimateFiller():
                         data.add_column('rs', l)
                         data.keep_columns(['rs'])
                         data.rename_columns({'rs': 'ssrd'})
-                        
+                        end_date += timedelta(1)
                         data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
-                        data.export(output_file, index=True) 
+                        data.export(output_file, index=True)
+                        
+                        if sequential_downloading is True:
+                            if self.data.is_empty():
+                                self.data.set_dataframe(data.get_dataframe())
+                            else:
+                                self.data.join(data.get_dataframe())
                         
                 elif variable == 'ws':
                     era5_land_variables = ['u_component_of_wind_10m', 'v_component_of_wind_10m']
 
-                    self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date)
+                    self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
                     
                     for year in range(start_date.year, end_date.year + 1):
                         cache_path = 'data/cache/' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
@@ -765,8 +787,15 @@ class ClimateFiller():
                         data.drop_columns(['u10', 'v10'])
                         data.column_to_date('datetime')
                         data.reindex_dataframe('datetime')
+                        end_date += timedelta(1)
                         data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
                         data.export(output_file, index=True)
+                        
+                        if sequential_downloading is True:
+                            if self.data.is_empty():
+                                self.data.set_dataframe(data.get_dataframe())
+                            else:
+                                self.data.join(data.get_dataframe())
 
             else:
                 
@@ -827,6 +856,11 @@ class ClimateFiller():
     def download_era5_land_data_by_years(self, variables, lon, lat, start_date, end_date):
         point = ee.Geometry.Point(lon, lat)
         era5_land = ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY').filterBounds(point)
+        
+        if isinstance(start_date, str) and isinstance(end_date, str):
+            # Convert the start date and end date to datetime objects
+            start_date = datetime.datetime.strptime(start_date, '%Y-%m-%d')
+            end_date = datetime.datetime.strptime(end_date, '%Y-%m-%d')
         
         for year in range(start_date.year, end_date.year + 1):
             cache_path = 'data/cache/' + '_'.join([str(s) for s in variables] + [str(lon), str(lat), str(year)]) + '.csv'
