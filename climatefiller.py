@@ -561,20 +561,19 @@ class ClimateFiller():
         self.data.drop_column('decision')
         
     def apply_constraint(self, column_name, constraint):
-        """Function Name: apply_constraint
+        """
+        This function applies a constraint to a column of a dataframe.
 
-            Description:
-            This function applies a constraint to a column of a dataframe.
-
-            Parameters:
+        Parameters:
 
             self: the instance of the class that the function is a part of.
             column_name: the name of the column to apply the constraint to.
             constraint: a string that represents the constraint to apply. The string should be in the form of a valid Python expression. The constraint will be applied to the column using the eval() function.
-            Returns:
+            
+        Returns:
             A dataframe with the specified constraint applied to the specified column.
 
-            Note:
+        Note:
             This function assumes that the dataframe has already been loaded into the class instance. The constraint parameter should be a valid Python expression that can be evaluated using the eval() function. This function requires the pandas library to be installed.
         """
         self.data.filter_dataframe(column_name, constraint)
