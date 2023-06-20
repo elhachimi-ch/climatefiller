@@ -7,6 +7,5 @@ __pycache__/
 *.grib
 *.idx
 *.csv
-*.rst
 *.html
 **/build
