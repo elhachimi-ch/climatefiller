@@ -18,13 +18,18 @@ class ClimateFiller():
     """The ClimateFiller class
     """
     
-    def __init__(self, data_link=None, data_type='csv', datetime_column_name='datetime', date_time_format='%Y-%m-%d %H:%M:%S', backend=None):
+    def __init__(self, data_path=None, 
+                 data_type='csv', 
+                 datetime_column_name='datetime', 
+                 date_time_format='%Y-%m-%d %H:%M:%S', 
+                 backend=None, 
+                 **kwargs):
         """
         Initializes an instance of the class with the specified parameters.
 
         Args:
             self (object): The instance of the class.
-            data_link (str or None): A string representing the link or path to the data source. Defaults to None.
+            data_path (str or None): A string representing the link or path to the data source. Defaults to None.
             data_type (str): The type of the data source. Defaults to 'csv'.
             datetime_column_name (str): The name of the column that contains datetime information. Defaults to 'datetime'.
             date_time_format (str): The format of the datetime values in the data source. Defaults to '%Y-%m-%d %H:%M:%S'.
@@ -34,21 +39,24 @@ class ClimateFiller():
 
         Notes:
             - The initialization of the class instance allows for handling and processing of the data.
-            - The data_link parameter specifies the location of the data source, which can be a link or a local path.
+            - The data_path parameter specifies the location of the data source, which can be a link or a local path.
             - The data_type parameter indicates the format or type of the data source, with 'csv' as the default value.
             - The datetime_column_name parameter identifies the column in the data source that contains datetime information.
             - The date_time_format parameter defines the format of the datetime values in the data source.
-            - If data_link is not provided, the instance will be initialized without any data source.
+            - If data_path is not provided, the instance will be initialized without any data source.
         """
         self.datetime_column_name = datetime_column_name
         self.backend = backend
         if backend == 'gee':
             ee.Initialize()
-        if data_link is None:
+        
+        if data_path is None:
             self.data = DataFrame()
+        
         else:
-            self.data = DataFrame(data_link=data_link, data_type=data_type)
+            self.data = DataFrame(data_path=data_path, data_type=data_type, **kwargs)
             self.data.column_to_date(datetime_column_name, date_time_format)
+            self.data.reindex_dataframe(datetime_column_name)
             self.datetime_column_name = datetime_column_name
         
     def show(self, number_of_row=None):
@@ -510,7 +518,7 @@ class ClimateFiller():
         et0_data.add_column('u2_mean', self.data.resample_timeseries(in_place=False)[wind_speed_column_name])
         et0_data.add_column('rg_mean', self.data.resample_timeseries(in_place=False)[global_solar_radiation_column_name])
         et0_data.index_to_column()
-        et0_data.add_doy_column('datetime')
+        et0_data.add_doy_column(self.datetime_column_name)
         et0_data.add_one_value_column('elevation', Lib.get_elevation_and_latitude(latitude, longitude))
         et0_data.add_one_value_column('lat', latitude)
         
