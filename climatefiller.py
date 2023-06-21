@@ -14,22 +14,18 @@ import geemap
 import re
 
 
+
 class ClimateFiller():
     """The ClimateFiller class
     """
     
-    def __init__(self, data_path=None, 
-                 data_type='csv', 
-                 datetime_column_name='datetime', 
-                 date_time_format='%Y-%m-%d %H:%M:%S', 
-                 backend=None, 
-                 **kwargs):
+    def __init__(self, data_link=None, data_type='csv', datetime_column_name='datetime', date_time_format='%Y-%m-%d %H:%M:%S', backend=None):
         """
         Initializes an instance of the class with the specified parameters.
 
         Args:
             self (object): The instance of the class.
-            data_path (str or None): A string representing the link or path to the data source. Defaults to None.
+            data_link (str or None): A string representing the link or path to the data source. Defaults to None.
             data_type (str): The type of the data source. Defaults to 'csv'.
             datetime_column_name (str): The name of the column that contains datetime information. Defaults to 'datetime'.
             date_time_format (str): The format of the datetime values in the data source. Defaults to '%Y-%m-%d %H:%M:%S'.
@@ -39,24 +35,21 @@ class ClimateFiller():
 
         Notes:
             - The initialization of the class instance allows for handling and processing of the data.
-            - The data_path parameter specifies the location of the data source, which can be a link or a local path.
+            - The data_link parameter specifies the location of the data source, which can be a link or a local path.
             - The data_type parameter indicates the format or type of the data source, with 'csv' as the default value.
             - The datetime_column_name parameter identifies the column in the data source that contains datetime information.
             - The date_time_format parameter defines the format of the datetime values in the data source.
-            - If data_path is not provided, the instance will be initialized without any data source.
+            - If data_link is not provided, the instance will be initialized without any data source.
         """
         self.datetime_column_name = datetime_column_name
         self.backend = backend
         if backend == 'gee':
             ee.Initialize()
-        
-        if data_path is None:
+        if data_link is None:
             self.data = DataFrame()
-        
         else:
-            self.data = DataFrame(data_path=data_path, data_type=data_type, **kwargs)
+            self.data = DataFrame(data_link=data_link, data_type=data_type)
             self.data.column_to_date(datetime_column_name, date_time_format)
-            self.data.reindex_dataframe(datetime_column_name)
             self.datetime_column_name = datetime_column_name
         
     def show(self, number_of_row=None):
@@ -518,7 +511,7 @@ class ClimateFiller():
         et0_data.add_column('u2_mean', self.data.resample_timeseries(in_place=False)[wind_speed_column_name])
         et0_data.add_column('rg_mean', self.data.resample_timeseries(in_place=False)[global_solar_radiation_column_name])
         et0_data.index_to_column()
-        et0_data.add_doy_column(self.datetime_column_name)
+        et0_data.add_doy_column('datetime')
         et0_data.add_one_value_column('elevation', Lib.get_elevation_and_latitude(latitude, longitude))
         et0_data.add_one_value_column('lat', latitude)
         
@@ -561,19 +554,20 @@ class ClimateFiller():
         self.data.drop_column('decision')
         
     def apply_constraint(self, column_name, constraint):
-        """
-        This function applies a constraint to a column of a dataframe.
+        """Function Name: apply_constraint
 
-        Parameters:
+            Description:
+            This function applies a constraint to a column of a dataframe.
+
+            Parameters:
 
             self: the instance of the class that the function is a part of.
             column_name: the name of the column to apply the constraint to.
             constraint: a string that represents the constraint to apply. The string should be in the form of a valid Python expression. The constraint will be applied to the column using the eval() function.
-            
-        Returns:
+            Returns:
             A dataframe with the specified constraint applied to the specified column.
 
-        Note:
+            Note:
             This function assumes that the dataframe has already been loaded into the class instance. The constraint parameter should be a valid Python expression that can be evaluated using the eval() function. This function requires the pandas library to be installed.
         """
         self.data.filter_dataframe(column_name, constraint)
@@ -667,142 +661,158 @@ class ClimateFiller():
                 if variable == 'ta':
                     era5_land_variables = ['temperature_2m']
                     
-                    self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
-                    
-                    for year in range(start_date.year, end_date.year + 1):
-                        cache_path = 'data/cache/' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
-                        temp_data = DataFrame(cache_path)
-                        data.append_dataframe(temp_data.get_dataframe())
-                        
-                    if not 'first' in temp_data.get_columns_names():
-                        print(f'No data found in GEE about {variable} for ({lon, lat})')
-                        #cf = ClimateFiller()
-                        #cf.download(variable, start_datetime, start_datetime + next_year, longitude, latitude)
+                    output_file = 'data/' + '_'.join([variable, str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
+                    if os.path.exists(output_file):
+                        print(f"Time series already downloaded on: {output_file}")
                     else:
-                        output_file = 'data/' + '_'.join([variable, str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
-                        data.rename_columns({'first': 't2m'})
-                        data.transform_column('t2m', lambda o: o - 273.15)
-                        data.column_to_date('datetime')
-                        data.reindex_dataframe('datetime')
-                        end_date += timedelta(1)
-                        data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
-                        data.export(output_file, index=True)
+                        self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
                         
-                        if sequential_downloading is True:
-                            if self.data.is_empty():
-                                self.data.set_dataframe(data.get_dataframe())
-                            else:
-                                self.data.join(data.get_dataframe())
+                        for year in range(start_date.year, end_date.year + 1):
+                            cache_path = 'data/cache/' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
+                            temp_data = DataFrame(cache_path)
+                            data.append_dataframe(temp_data.get_dataframe())
+                            
+                        if not 'first' in temp_data.get_columns_names():
+                            print(f'No data found in GEE about {variable} for ({lon, lat})')
+                            #cf = ClimateFiller()
+                            #cf.download(variable, start_datetime, start_datetime + next_year, longitude, latitude)
+                        else:
+                            
+                            data.rename_columns({'first': 't2m'})
+                            data.transform_column('t2m', lambda o: o - 273.15)
+                            data.column_to_date('datetime')
+                            data.reindex_dataframe('datetime')
+                            end_date += timedelta(1)
+                            data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
+                            data.export(output_file, index=True)
+                            
+                            if sequential_downloading is True:
+                                if self.data.is_empty():
+                                    self.data.set_dataframe(data.get_dataframe())
+                                else:
+                                    self.data.join(data.get_dataframe())
                     
                 elif variable == 'rh':
                     era5_land_variables = ['temperature_2m', 'dewpoint_temperature_2m']
                     
-                    self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
-                    
-                    for year in range(start_date.year, end_date.year + 1):
-                        cache_path = 'data/cache/' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
-                        temp_data = DataFrame(cache_path)
-                        data.append_dataframe(temp_data.get_dataframe())
-                        
-                    if not 'temperature_2m' in temp_data.get_columns_names() and 'dewpoint_temperature_2m' in temp_data.get_columns_names():
-                        print(f'No data found in GEE about {variable} for ({lon, lat})')
-                        #cf = ClimateFiller()
-                        #cf.download(variable, start_datetime, start_datetime + next_year, longitude, latitude)
+                    output_file = 'data/' + '_'.join([variable, str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
+                    if os.path.exists(output_file):
+                        print(f"Time series already downloaded on: {output_file}")
                     else:
-                        output_file = 'data/' + '_'.join([variable, str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
-                        data.rename_columns({'temperature_2m': 't2m', 'dewpoint_temperature_2m': 'd2m'})
-                        data.transform_column('t2m', lambda o: o - 273.15)
-                        data.transform_column('d2m', lambda o: o - 273.15)
-                        data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
-                        data.drop_columns(['t2m', 'd2m'])
-                        data.column_to_date('datetime')
-                        data.reindex_dataframe('datetime')
-                        end_date += timedelta(1)
-                        data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
-                        data.export(output_file, index=True)
+                        self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
                         
-                        if sequential_downloading is True:
-                            if self.data.is_empty():
-                                self.data.set_dataframe(data.get_dataframe())
-                            else:
-                                self.data.join(data.get_dataframe())
+                        for year in range(start_date.year, end_date.year + 1):
+                            cache_path = 'data/cache/' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
+                            temp_data = DataFrame(cache_path)
+                            data.append_dataframe(temp_data.get_dataframe())
+                            
+                        if not 'temperature_2m' in temp_data.get_columns_names() and 'dewpoint_temperature_2m' in temp_data.get_columns_names():
+                            print(f'No data found in GEE about {variable} for ({lon, lat})')
+                            #cf = ClimateFiller()
+                            #cf.download(variable, start_datetime, start_datetime + next_year, longitude, latitude)
+                        else:
+                            output_file = 'data/' + '_'.join([variable, str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
+                            data.rename_columns({'temperature_2m': 't2m', 'dewpoint_temperature_2m': 'd2m'})
+                            data.transform_column('t2m', lambda o: o - 273.15)
+                            data.transform_column('d2m', lambda o: o - 273.15)
+                            data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
+                            data.drop_columns(['t2m', 'd2m'])
+                            data.column_to_date('datetime')
+                            data.reindex_dataframe('datetime')
+                            end_date += timedelta(1)
+                            data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
+                            data.export(output_file, index=True)
+                            
+                            if sequential_downloading is True:
+                                if self.data.is_empty():
+                                    self.data.set_dataframe(data.get_dataframe())
+                                else:
+                                    self.data.join(data.get_dataframe())
 
                 elif variable == 'rs':
                     era5_land_variables = ['surface_solar_radiation_downwards']
-
-                    self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
                     
-                    for year in range(start_date.year, end_date.year + 1):
-                        cache_path = 'data/cache/' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
-                        temp_data = DataFrame(cache_path)
-                        data.append_dataframe(temp_data.get_dataframe())
-                        
-                    if not 'first' in temp_data.get_columns_names():
-                        print(f'No data found in GEE about {variable} for ({lon, lat})')
-                        #cf = ClimateFiller()
-                        #cf.download(variable, start_datetime, start_datetime + next_year, longitude, latitude)
+                    output_file = 'data/' + '_'.join([variable, str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
+                    if os.path.exists(output_file):
+                        print(f"Time series already downloaded on: {output_file}")
                     else:
-                        output_file = 'data/' + '_'.join([variable, str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
-                        data.rename_columns({'first': 'ssrd'})
-                        data.column_to_date('datetime')
-                        data.reindex_dataframe('datetime')
+                        self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
                         
-                        
-                        l = []
-                        for p in data.get_index():
-                            if p.hour == 1:
-                                new_value = data.get_row(p)['ssrd']/3600
-                            else:
-                                try:
-                                    previous_hour = data.get_row(p-timedelta(hours=1))['ssrd']
-                                except KeyError:
-                                    previous_hour = data.get_row(p)['ssrd']
-                                    
-                                new_value = (data.get_row(p)['ssrd'] - previous_hour)/3600
-                            l.append(new_value)
-                        data.add_column('rs', l)
-                        data.keep_columns(['rs'])
-                        data.rename_columns({'rs': 'ssrd'})
-                        end_date += timedelta(1)
-                        data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
-                        data.export(output_file, index=True)
-                        
-                        if sequential_downloading is True:
-                            if self.data.is_empty():
-                                self.data.set_dataframe(data.get_dataframe())
-                            else:
-                                self.data.join(data.get_dataframe())
+                        for year in range(start_date.year, end_date.year + 1):
+                            cache_path = 'data/cache/' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
+                            temp_data = DataFrame(cache_path)
+                            data.append_dataframe(temp_data.get_dataframe())
+                            
+                        if not 'first' in temp_data.get_columns_names():
+                            print(f'No data found in GEE about {variable} for ({lon, lat})')
+                            #cf = ClimateFiller()
+                            #cf.download(variable, start_datetime, start_datetime + next_year, longitude, latitude)
+                        else:
+                            output_file = 'data/' + '_'.join([variable, str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
+                            data.rename_columns({'first': 'ssrd'})
+                            data.column_to_date('datetime')
+                            data.reindex_dataframe('datetime')
+                            
+                            
+                            l = []
+                            for p in data.get_index():
+                                if p.hour == 1:
+                                    new_value = data.get_row(p)['ssrd']/3600
+                                else:
+                                    try:
+                                        previous_hour = data.get_row(p-timedelta(hours=1))['ssrd']
+                                    except KeyError:
+                                        previous_hour = data.get_row(p)['ssrd']
+                                        
+                                    new_value = (data.get_row(p)['ssrd'] - previous_hour)/3600
+                                l.append(new_value)
+                            data.add_column('rs', l)
+                            data.keep_columns(['rs'])
+                            data.rename_columns({'rs': 'ssrd'})
+                            end_date += timedelta(1)
+                            data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
+                            data.export(output_file, index=True)
+                            
+                            if sequential_downloading is True:
+                                if self.data.is_empty():
+                                    self.data.set_dataframe(data.get_dataframe())
+                                else:
+                                    self.data.join(data.get_dataframe())
                         
                 elif variable == 'ws':
                     era5_land_variables = ['u_component_of_wind_10m', 'v_component_of_wind_10m']
 
-                    self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
-                    
-                    for year in range(start_date.year, end_date.year + 1):
-                        cache_path = 'data/cache/' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
-                        temp_data = DataFrame(cache_path)
-                        data.append_dataframe(temp_data.get_dataframe())
-                        
-                    if not 'u_component_of_wind_10m' in temp_data.get_columns_names() and 'v_component_of_wind_10m' in temp_data.get_columns_names():
-                        print(f'No data found in GEE about {variable} for ({lon, lat})')
-                        #cf = ClimateFiller()
-                        #cf.download(variable, start_datetime, start_datetime + next_year, longitude, latitude)
+                    output_file = 'data/' + '_'.join([variable, str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
+                    if os.path.exists(output_file):
+                        print(f"Time series already downloaded on: {output_file}")
                     else:
-                        output_file = 'data/' + '_'.join([variable, str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
-                        data.rename_columns({'u_component_of_wind_10m': 'u10', 'v_component_of_wind_10m': 'v10'})
-                        data.add_column_based_on_function('era5_ws', Lib.get_2m_wind_speed)
-                        data.drop_columns(['u10', 'v10'])
-                        data.column_to_date('datetime')
-                        data.reindex_dataframe('datetime')
-                        end_date += timedelta(1)
-                        data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
-                        data.export(output_file, index=True)
+                        self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
                         
-                        if sequential_downloading is True:
-                            if self.data.is_empty():
-                                self.data.set_dataframe(data.get_dataframe())
-                            else:
-                                self.data.join(data.get_dataframe())
+                        for year in range(start_date.year, end_date.year + 1):
+                            cache_path = 'data/cache/' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
+                            temp_data = DataFrame(cache_path)
+                            data.append_dataframe(temp_data.get_dataframe())
+                            
+                        if not 'u_component_of_wind_10m' in temp_data.get_columns_names() and 'v_component_of_wind_10m' in temp_data.get_columns_names():
+                            print(f'No data found in GEE about {variable} for ({lon, lat})')
+                            #cf = ClimateFiller()
+                            #cf.download(variable, start_datetime, start_datetime + next_year, longitude, latitude)
+                        else:
+                            output_file = 'data/' + '_'.join([variable, str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
+                            data.rename_columns({'u_component_of_wind_10m': 'u10', 'v_component_of_wind_10m': 'v10'})
+                            data.add_column_based_on_function('era5_ws', Lib.get_2m_wind_speed)
+                            data.drop_columns(['u10', 'v10'])
+                            data.column_to_date('datetime')
+                            data.reindex_dataframe('datetime')
+                            end_date += timedelta(1)
+                            data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
+                            data.export(output_file, index=True)
+                            
+                            if sequential_downloading is True:
+                                if self.data.is_empty():
+                                    self.data.set_dataframe(data.get_dataframe())
+                                else:
+                                    self.data.join(data.get_dataframe())
 
             else:
                 
