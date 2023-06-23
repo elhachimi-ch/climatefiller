@@ -3,7 +3,7 @@
 [![readthedocs](https://img.shields.io/badge/docs-latest-brightgreen.svg?style=flat)](https://climatefiller.readthedocs.io/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Reproducible Capsule](https://img.shields.io/static/v1?label=&message=code+ocean&color=blue)](https://codeocean.com/capsule/1309232/tree)
-
+ 
 ClimateFiller is a python framework that implements various data-driven methods to make manipulating in-situ climate time series easier. It offers various services such as (1) automating gap-filling (2) using machine learning and ERA5-Land for bias correction (3) using Isolation Forest, Local Outlier Factor, and quantiles to detect and eliminate outliers. It was tested on several Automatic Weather Stations (AWS) installed in Morocco.
 
 DISCLAIMER:
