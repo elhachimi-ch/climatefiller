@@ -276,12 +276,17 @@ class ClimateFiller():
             data.missing_data('t2m')
             data.transform_column('t2m', lambda o: o - 273.15)
             data.transform_column('d2m', lambda o: o - 273.15)
+            
+            """RH: =100*(EXP((17.625*TD)/(243.04+TD))/EXP((17.625*T)/(243.04+T)))
+            TD: =243.04*(LN(RH/100)+((17.625*T)/(243.04+T)))/(17.625-LN(RH/100)-((17.625*T)/(243.04+T)))
+            T: =243.04*(((17.625*TD)/(243.04+TD))-LN(RH/100))/(17.625+LN(RH/100)-((17.625*TD)/(243.04+TD)))"""
+            
             data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
             data.missing_data('era5_hr')
             nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
             for p in nan_indices:
                 self.data.set_row('rh', p, data.get_row(p)['era5_hr'])
-            
+             
             print('Imputation of missing data for rh from ERA5-Land was done!')
             
         elif column_to_fill_name == 'ws':
@@ -867,7 +872,6 @@ class ClimateFiller():
             - The exported data can be used for further analysis, sharing, or storage.
         """
         self.data.export(path_link, data_type)
-        
   
   
     def download_era5_land_data_by_years(self, variables, lon, lat, start_date, end_date):
