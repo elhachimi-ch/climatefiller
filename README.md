@@ -12,7 +12,7 @@ Please note that this project is currently in the BETA stage and will remain exp
 
 # How to Install
 
-## Climate Data Store API Setup
+## 1- Climate Data Store API Setup
 
 <ol>
 
@@ -39,7 +39,7 @@ Replace YOUR_CDS_API_KEY with your actual CDS API key.
 </ol>
 
 
-## Google Earth Engine Setup
+## 2- Google Earth Engine Setup
 
 <ol>
 
@@ -79,7 +79,7 @@ Follow the instructions to authorize the Earth Engine API with your Google accou
 
 
 
-## Project Installation
+## 3- Project Installation
 
 <ol>
 
@@ -104,7 +104,7 @@ pip install -r requirements.txt
 
 
 
-## Simple Demo
+## 4- Simple Demo
 
 ```python
 import time
@@ -130,7 +130,6 @@ climate_filler.eliminate_outliers('Ta')
 # Documentation
 
 More information can be found on the [ClimateFiller framework documentation site.](https://climatefiller.readthedocs.io/)
-
 # Contributing
 
 Contrubution and suggestions are welcome via GitHub Pull Requests.
