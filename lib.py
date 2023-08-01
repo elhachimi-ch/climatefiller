@@ -142,7 +142,6 @@ class Lib:
     
     @staticmethod
     def get_2m_wind_speed(row):
-        
         uz, vz, z = row['u10'], row['v10'], 10
         
         # calculate 10m wind speed magnitude
