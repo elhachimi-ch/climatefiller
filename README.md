@@ -18,6 +18,8 @@ Please note that this project is currently in the BETA stage and will remain exp
 
 <li> 
 Obtain a Climate Data Store (CDS) API key: <br> To access the Climate Data Store API, you'll need to register and obtain an API key from their website: https://cds.climate.copernicus.eu/user/register
+<br> Go to your profile and copy your key from the <b>API key</b> section
+
 </li>
 
 <li>
@@ -62,7 +64,7 @@ Ceate a new project: <br>
 
 <li>
 
-Authenticate the Earth Engine API: <br> After installing the Earth Engine Python API, authenticate it by running in terminal:
+Authenticate the Earth Engine API by running in terminal:
 </li>
 
 ```bash
