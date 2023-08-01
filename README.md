@@ -10,60 +10,99 @@ DISCLAIMER:
 Please note that this project is currently in the BETA stage and will remain experimental for the foreseeable future. As a result, there is a high probability of Classes, methods names, and other functionalities undergoing modifications.
 
 
-## How to Install
+# How to Install
 
-# Climate Data Store API Setup
+## Climate Data Store API Setup
 
-1- Obtain a Climate Data Store (CDS) API key: To access the Climate Data Store API, you'll need to register and obtain an API key from their website: https://cds.climate.copernicus.eu/user/register
+<ol>
 
-2- Configure the API key: Once you have the API key, create a file named .cdsapirc in the project's root directory and add the API key to it:
+<li> 
+Obtain a Climate Data Store (CDS) API key: <br> To access the Climate Data Store API, you'll need to register and obtain an API key from their website: https://cds.climate.copernicus.eu/user/register
+</li>
+
+<li>
+Configure the API key: <br> Once you have the API key, create a file named <b>.cdsapirc</b> in the project's root directory and add the API key to it:
+</li>
+
 
 ```javascript
 {
-  "url": "https://cds.climate.copernicus.eu/api/v2",
-  "key": "YOUR_CDS_API_KEY"
+    "url": "https://cds.climate.copernicus.eu/api/v2",
+    "key": "YOUR_CDS_API_KEY"
 }
 ```
 
+<li>
 Replace YOUR_CDS_API_KEY with your actual CDS API key.
+</li>
+
+</ol>
 
 
-# Google Earth Engine Setup
+## Google Earth Engine Setup
+
+<ol>
+
+<li>
+
+Sign up for Google Earth Engine: <br> To use Google Earth Engine, sign up for an Earth Engine account at https://earthengine.google.com/signup/
+</li>
+
+<li>
+Download and install Google Cloud SDK at: <br> <a href='https://cloud.google.com/sdk/docs/install'> https://cloud.google.com/sdk/docs/install </a>
+</li>
+
+<li>
+Ceate a new project: <br>
+
+<a href='https://earthengine.google.com/signup'> https://earthengine.google.com/signup </a>
+
+</li>
 
 
-1- Sign up for Google Earth Engine: To use Google Earth Engine, sign up for an Earth Engine account at https://earthengine.google.com/signup/. Note that Google Earth Engine access is currently limited and may require approval.
+<li>
 
-2- Install the Earth Engine Python API: Install the Earth Engine Python API using pip:
-
-```bash
-pip install earthengine-api
-```
-
-3- Authenticate the Earth Engine API: After installing the Earth Engine Python API, authenticate it by running:
+Authenticate the Earth Engine API: <br> After installing the Earth Engine Python API, authenticate it by running in terminal:
+</li>
 
 ```bash
 earthengine authenticate
 ```
+Follow the instructions to authorize the Earth Engine API with your Google account. This method, enables you access the API without having to request authorization every time.
 
-4- Follow the instructions to authorize the Earth Engine API with your Google account.
+
+
+
+
+
+</ol>
+
 
 
 ## Project Installation
 
-Clone the repository: Clone this GitHub repository to your local machine using the following command:
+<ol>
+
+<li>
+Clone this GitHub repository to your local machine using the following command:
+</li>
 
 ```bash
-git clone https://github.com/your-username/your-repo.git
+git clone https://github.com/elhachimi-ch/climatefiller.git
 ```
 
-Replace your-username and your-repo with your GitHub username and repository name.
-
-Install project dependencies: Change to the project directory and install the required Python packages using pip:
+<li>
+Install project dependencies: <br> Change to the project directory and install the required Python packages using pip:
+</li>
 
 ```bash
 cd your-repo
 pip install -r requirements.txt
 ```
+
+</ol>
+
+
 
 ## Simple Demo
 
@@ -88,16 +127,18 @@ climate_filler.missing_data(filling_dict_colmn_val={'Ta': 0})
 climate_filler.eliminate_outliers('Ta')
 ```
 
-## Documentation
+# Documentation
 
 More information can be found on the [ClimateFiller framework documentation site.](https://climatefiller.readthedocs.io/)
 
-### Contributing
+# Contributing
 
 Contrubution and suggestions are welcome via GitHub Pull Requests.
 
-### Maintainership
+# Maintainership
 
 We're actively enhacing the repo with new algorithms.
 
-### How to cite
+# How to cite
+
+The research paper of the project is under review
