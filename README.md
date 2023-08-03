@@ -94,11 +94,27 @@ git clone https://github.com/elhachimi-ch/climatefiller.git
 ```
 
 <li>
-Install project dependencies: <br> Change to the project directory and install the required Python packages using pip:
+Install project dependencies using conda (prefered way):
 </li>
 
 ```bash
-cd your-repo
+conda env create -f environment.yml
+```
+
+```bash
+conda activate climate_filler
+```
+
+```bash
+python kitchen.py
+```
+
+
+
+Or you can install project dependencies using pip (not recommended):
+
+
+```bash
 pip install -r requirements.txt
 ```
 
