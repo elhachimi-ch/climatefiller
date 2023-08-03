@@ -806,7 +806,6 @@ class ClimateFiller():
             result = data_merra['properties']['parameter'][merra2_variable]
             df = pd.DataFrame(result.items(), columns=['datetime', merra2_variable])
             df['datetime'] = pd.to_datetime(df['datetime'], format='%Y%m%d%H')
-
             print('Downloaded data from Merra2 for {} is done'.format(variable))
             self.data_reanalysis.set_dataframe(df)
 

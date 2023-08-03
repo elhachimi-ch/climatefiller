@@ -9,11 +9,14 @@ def main():
     # Read the time series 
     #data.reindex_dataframe('datetime')
     
-    climate_filler = ClimateFiller(r"C:\Users\elhac\OneDrive\Desktop\R3_meteo_N0_Unification.xlsx", data_type='xls', datetime_column_name='DateBis', usecols='A:G', sheet_name='R3_2013-2020')
+    climate_filler = ClimateFiller(r"D:\one_drive\OneDrive - Université Mohammed VI Polytechnique\crsa\data\climate_data_mongo_export.csv", backend='gee')
     
-    climate_filler.et0_estimation('R3_Tair', 'R3_Rg', 'R3_Hr', 'R3_Vv')
+    #climate_filler.et0_estimation('R3_Tair', 'R3_Rg', 'R3_Hr', 'R3_Vv')
+    climate_filler.data.resample_timeseries(frequency='H')
+    climate_filler.data.rename_columns({'R3_Tair':'ta'})
+    climate_filler.fill('ta', product='era5_land', machine_learning_enabled=True)
     
-    print(climate_filler.data.show())
+    
     # -8.87,32.56,
     #climate_filler.download('ta', longitude=-8.87, latitude=32.56, start_date='2020-01-01', end_date='2022-07-01', backend='gee')
     #climate_filler.download('ta', backend='gee', start_date='2000-05-01', end_date='2002-05-01') 
