@@ -94,7 +94,7 @@ git clone https://github.com/elhachimi-ch/climatefiller.git
 ```
 
 <li>
-Install project dependencies using conda (prefered way):
+Install project dependencies using conda (Preferred way):
 </li>
 
 ```bash
