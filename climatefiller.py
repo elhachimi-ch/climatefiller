@@ -1281,8 +1281,7 @@ class ClimateFiller():
         if not os.path.exists(directory_path):
             os.makedirs(directory_path)
             print(f"Directory created: {directory_path}")
-        
-
+            
 
     """def learn_error(self,):
         data_x =
@@ -1294,3 +1293,5 @@ class ClimateFiller():
         
         for p in missing_data_row:
             data.set_row('', model.predict(data.get_row))"""
+        
+                
