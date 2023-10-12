@@ -162,6 +162,8 @@ class ClimateFiller():
                 era5_land_variables = ['surface_solar_radiation_downwards']
             elif column_to_fill_name == 'ws':
                 era5_land_variables = ['10m_u_component_of_wind', '10m_v_component_of_wind']
+            elif column_to_fill_name == 'p':
+                era5_land_variables = ['total_precipitation']
                 
                 
             from data_science_toolkit.gis import GIS
@@ -379,6 +381,63 @@ class ClimateFiller():
                 nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
                 for p in nan_indices:
                     self.data.set_row('rs', p, data.get_row(p)['ssrd'])
+             
+                self.data.index_to_column()
+                print('Imputation of missing data for ' + column_to_fill_name + ' from MERRA2 was done.')
+                
+                print('Imputation of missing data for rs from ERA5-Land was done!')
+            
+            elif column_to_fill_name == 'p':
+                for year in missing_data_dates:
+                    for month in missing_data_dates[year]['month']:
+                        data.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                        
+                data.reset_index()
+                data.reindex_dataframe("valid_time")
+                data.missing_data('p')
+                l = []
+                for p in data.get_index():
+                    if p.hour == 1:
+                        new_value = data.get_row(p)['ssrd']/3600
+                    else:
+                        try:
+                            previous_hour = data.get_row(p-timedelta(hours=1))['ssrd']
+                        except KeyError: # if age is not convertable to int
+                            previous_hour = data.get_row(p)['ssrd']
+                            
+                        new_value = (data.get_row(p)['ssrd'] - previous_hour)/3600
+                    l.append(new_value)
+                data.add_column('rs', l)
+                data.keep_columns(['rs'])
+                data.rename_columns({'rs': 'ssrd'})
+                print(data.show())
+                
+                
+                
+                data.rename_columns({'first': 'p5'})
+                data.column_to_date('datetime')
+                data.reindex_dataframe('datetime')
+                
+                l = []
+                for p in data.get_index():
+                    if p.hour == 1:
+                        new_value = data.get_row(p)['p5'] * 1000
+                    else:
+                        try:
+                            previous_hour = data.get_row(p-timedelta(hours=1))['p5']
+                        except KeyError:
+                            previous_hour = data.get_row(p)['p5']
+                            
+                        new_value = (data.get_row(p)['p5'] - previous_hour)*1000
+                    l.append(new_value)
+                
+                data.add_column('p', l)
+                data.keep_columns(['p'])
+                
+                
+                nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
+                for p in nan_indices:
+                    self.data.set_row('p', p, data.get_row(p)['p5'])
              
                 self.data.index_to_column()
                 print('Imputation of missing data for ' + column_to_fill_name + ' from MERRA2 was done.')
