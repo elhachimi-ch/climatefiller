@@ -15,7 +15,7 @@ def main():
     
     climate_filler.data.resample_timeseries(skip_rows=2)
     print(climate_filler.data.show())
-    climate_filler.fill('ta')
+    climate_filler.fill('p')
     
     #climate_filler.et0_estimation('R3_Tair', 'R3_Rg', 'R3_Hr', 'R3_Vv')
     #climate_filler.data.resample_timeseries(frequency='H')

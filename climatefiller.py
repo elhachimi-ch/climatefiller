@@ -330,10 +330,10 @@ class ClimateFiller():
                 data_v10 = DataFrame()
                 for year in missing_data_dates:
                     for month in missing_data_dates[year]['month']:
-                        data_u10.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + '10m_u_component_of_wind' + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                        data_u10.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5land_" + column_to_fill_name + '_' + '10m_u_component_of_wind' + '_' + str(year) + '_' + month + ".grib", "ta"),)
                 for year in missing_data_dates:
                     for month in missing_data_dates[year]['month']:
-                        data_v10.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + '10m_v_component_of_wind' + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                        data_v10.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5land_" + column_to_fill_name + '_' + '10m_v_component_of_wind' + '_' + str(year) + '_' + month + ".grib", "ta"),)
                 
                 data_u10.reset_index()
                 data_u10.reindex_dataframe("valid_time")
@@ -355,7 +355,8 @@ class ClimateFiller():
             elif column_to_fill_name == 'rs':
                 for year in missing_data_dates:
                     for month in missing_data_dates[year]['month']:
-                        data.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                        data_month_path = 'data\era5land_' + column_to_fill_name + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                        data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
                         
                 data.reset_index()
                 data.reindex_dataframe("valid_time")
@@ -375,7 +376,6 @@ class ClimateFiller():
                 data.add_column('rs', l)
                 data.keep_columns(['rs'])
                 data.rename_columns({'rs': 'ssrd'})
-                print(data.show())
                 
                 data.transform_column('ssrd', lambda o : o if abs(o) < 1500 else 0 )    
                 nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
@@ -383,68 +383,46 @@ class ClimateFiller():
                     self.data.set_row('rs', p, data.get_row(p)['ssrd'])
              
                 self.data.index_to_column()
-                print('Imputation of missing data for ' + column_to_fill_name + ' from MERRA2 was done.')
-                
-                print('Imputation of missing data for rs from ERA5-Land was done!')
+                print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
             
             elif column_to_fill_name == 'p':
                 for year in missing_data_dates:
                     for month in missing_data_dates[year]['month']:
-                        data.append_dataframe(gis.get_era5_land_grib_as_dataframe('data\era5land_' + column_to_fill_name + '_' + str(lon) + '_' + str(lat) + '_' + str(y) + '_' + month + '.grib', "ta"),)
-                        
+                        data_month_path = 'data\era5land_' + column_to_fill_name + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                        data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
+                
+                
                 data.reset_index()
+                data.column_to_date('valid_time')
                 data.reindex_dataframe("valid_time")
-                data.missing_data('p')
-                l = []
-                for p in data.get_index():
-                    if p.hour == 1:
-                        new_value = data.get_row(p)['ssrd']/3600
-                    else:
-                        try:
-                            previous_hour = data.get_row(p-timedelta(hours=1))['ssrd']
-                        except KeyError: # if age is not convertable to int
-                            previous_hour = data.get_row(p)['ssrd']
-                            
-                        new_value = (data.get_row(p)['ssrd'] - previous_hour)/3600
-                    l.append(new_value)
-                data.add_column('rs', l)
-                data.keep_columns(['rs'])
-                data.rename_columns({'rs': 'ssrd'})
-                print(data.show())
-                
-                
-                
-                data.rename_columns({'first': 'p5'})
-                data.column_to_date('datetime')
-                data.reindex_dataframe('datetime')
+                data.sort()
+                data.missing_data('tp')
+                nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
+                data.drop_duplicated_indexes()
                 
                 l = []
                 for p in data.get_index():
                     if p.hour == 1:
-                        new_value = data.get_row(p)['p5'] * 1000
+                        new_value = data.get_row(p)['tp'] * 1000
                     else:
                         try:
-                            previous_hour = data.get_row(p-timedelta(hours=1))['p5']
+                            previous_hour = data.get_row(p-timedelta(hours=1))['tp']
                         except KeyError:
-                            previous_hour = data.get_row(p)['p5']
+                            previous_hour = data.get_row(p)['tp']
                             
-                        new_value = (data.get_row(p)['p5'] - previous_hour)*1000
+                        new_value = (data.get_row(p)['tp'] - previous_hour)*1000
                     l.append(new_value)
-                
+        
                 data.add_column('p', l)
                 data.keep_columns(['p'])
-                
+                data.rename_columns({'p': 'tp'})
                 
                 nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
                 for p in nan_indices:
-                    self.data.set_row('p', p, data.get_row(p)['p5'])
+                    self.data.set_row('p', p, data.get_row(p)['tp'])
              
                 self.data.index_to_column()
-                print('Imputation of missing data for ' + column_to_fill_name + ' from MERRA2 was done.')
-                
-                print('Imputation of missing data for rs from ERA5-Land was done!')
-                
-          
+                print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
             
             self.data.index_to_column()
         elif product == 'merra2':
