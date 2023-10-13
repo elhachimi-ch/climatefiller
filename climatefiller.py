@@ -390,7 +390,7 @@ class ClimateFiller():
             elif column_to_fill_name == 'p':
                 for year in missing_data_dates:
                     for month in missing_data_dates[year]['month']:
-                        data.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                        data.append_dataframe(gis.get_era5_land_grib_as_dataframe('data\era5land_' + column_to_fill_name + '_' + str(lon) + '_' + str(lat) + '_' + str(y) + '_' + month + '.grib', "ta"),)
                         
                 data.reset_index()
                 data.reindex_dataframe("valid_time")

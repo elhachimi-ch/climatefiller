@@ -9,12 +9,18 @@ def main():
     # Read the time series 
     #data.reindex_dataframe('datetime')
     
-    climate_filler = ClimateFiller(r"D:\one_drive\OneDrive - Université Mohammed VI Polytechnique\crsa\data\climate_data_mongo_export.csv", backend='gee')
+    climate_filler = ClimateFiller(r"D:\projects\one_drive\OneDrive - Université Mohammed VI Polytechnique\crsa\data\climate_data_mongo_export.csv", 
+                                   backend='gee',
+                                   datetime_column_name='datetime')
+    
+    climate_filler.data.resample_timeseries(skip_rows=2)
+    print(climate_filler.data.show())
+    climate_filler.fill('ta')
     
     #climate_filler.et0_estimation('R3_Tair', 'R3_Rg', 'R3_Hr', 'R3_Vv')
-    climate_filler.data.resample_timeseries(frequency='H')
-    climate_filler.data.rename_columns({'R3_Tair':'ta'})
-    climate_filler.fill('ta', product='era5_land', machine_learning_enabled=True)
+    #climate_filler.data.resample_timeseries(frequency='H')
+    #climate_filler.data.rename_columns({'R3_Tair':'ta'})
+    #climate_filler.fill('ta', product='era5_land', machine_learning_enabled=True)
     
     
     # -8.87,32.56,
