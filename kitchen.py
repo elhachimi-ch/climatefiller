@@ -14,8 +14,13 @@ def main():
                                    datetime_column_name='datetime')
     
     climate_filler.data.resample_timeseries(skip_rows=2)
-    print(climate_filler.data.show())
+    climate_filler.data.drop_columns(['wd'])
+    climate_filler.fill('ta')
+    climate_filler.fill('rs')
+    climate_filler.fill('rh')
+    climate_filler.fill('ws')
     climate_filler.fill('p')
+    climate_filler.export('data/r3_era5land_imputed.csv', index=True)
     
     #climate_filler.et0_estimation('R3_Tair', 'R3_Rg', 'R3_Hr', 'R3_Vv')
     #climate_filler.data.resample_timeseries(frequency='H')
