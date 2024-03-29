@@ -6,11 +6,7 @@ from os.path import isfile, join
 from time import sleep
 from math import sqrt
 import numpy as np 
-import unidecode
-#from emoji import UNICODE_EMOJI
-from textblob import TextBlob
 #from stringdist.pystringdist.levenshtein import levenshtein as ed
-import nltk
 import calendar
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
@@ -151,3 +147,21 @@ class Lib:
         ws = wsz * (4.87 / math.log((67.8 * z) - 5.42))
         
         return ws
+    
+    @staticmethod
+    def energy2evap(energy):
+        """
+        Convert energy (e.g. radiation energy) in MJ m-2 day-1 to the equivalent
+        evaporation, assuming a grass reference crop.
+
+        Energy is converted to equivalent evaporation using a conversion
+        factor equal to the inverse of the latent heat of vapourisation
+        (1 / lambda = 0.408).
+
+        Based on FAO equation 20 in Allen et al (1998).
+
+        :param energy: Energy e.g. radiation or heat flux [MJ m-2 day-1].
+        :return: Equivalent evaporation [mm day-1].
+        :rtype: float
+        """
+        return 0.408 * energy
