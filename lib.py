@@ -165,3 +165,46 @@ class Lib:
         :rtype: float
         """
         return 0.408 * energy
+    
+    @staticmethod
+    def calc_pressure(z):
+        ''' Calculates the barometric pressure above sea level.
+
+        Parameters
+        ----------
+        z: float
+            height above sea level (m).
+
+        Returns
+        -------
+        p: float
+            air pressure (mb).'''
+
+        p = 1013.25 * (1.0 - 2.225577e-5 * z)**5.25588
+        return np.asarray(p)
+    
+
+        def calc_rho(p, ea, T_A_K):
+            '''Calculates the density of air.
+
+            Parameters
+            ----------
+            p : float
+                total air pressure (dry air + water vapour) (mb).
+            ea : float
+                water vapor pressure at reference height above canopy (mb).
+            T_A_K : float
+                air temperature at reference height (Kelvin).
+
+            Returns
+            -------
+            rho : float
+                density of air (kg m-3).
+
+            References
+            ----------
+            based on equation (2.6) from Brutsaert (2005): Hydrology - An Introduction (pp 25).'''
+
+            # p is multiplied by 100 to convert from mb to Pascals
+            rho = ((p * 100.0) / (R_d * T_A_K)) * (1.0 - (1.0 - epsilon) * ea / p)
+            return np.asarray(rho)
