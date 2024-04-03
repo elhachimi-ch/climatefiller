@@ -15,6 +15,23 @@ import requests
 from sklearn.metrics import mean_squared_error, r2_score, median_absolute_error, mean_squared_log_error, mean_absolute_error, classification_report
 
 class Lib:
+    
+    def __init__(self, *args, **kwargs):
+        # Stephan Boltzmann constant (W m-2 K-4)
+        self.SB = 5.670373e-8
+        # heat capacity of dry air at constant pressure (J kg-1 K-1)
+        self.C_PD = 1003.5
+        # heat capacity of water vapour at constant pressure (J kg-1 K-1)
+        self.C_PV = 1865
+        # ratio of the molecular weight of water vapor to dry air
+        self.epsilon = 0.622
+        # Psicrometric Constant kPa K-1
+        self.PSIRC = 0.0658
+        # gas constant for dry air, J/(kg*degK)
+        self.R_D = 287.04
+        # acceleration of gravity (m s-2)
+        self.G = 9.8
+    
     @staticmethod
     def et0_penman_monteith(row):
         # input variables
@@ -167,7 +184,7 @@ class Lib:
         return 0.408 * energy
     
     @staticmethod
-    def calc_pressure(z):
+    def estimate_pressure(z):
         ''' Calculates the barometric pressure above sea level.
 
         Parameters
@@ -184,27 +201,40 @@ class Lib:
         return np.asarray(p)
     
 
-        def calc_rho(p, ea, T_A_K):
-            '''Calculates the density of air.
+    def calc_rho(self, p, ea, T_A_K):
+        '''Calculates the density of air.
 
-            Parameters
-            ----------
-            p : float
-                total air pressure (dry air + water vapour) (mb).
-            ea : float
-                water vapor pressure at reference height above canopy (mb).
-            T_A_K : float
-                air temperature at reference height (Kelvin).
+        Parameters
+        ----------
+        p : float
+            total air pressure (dry air + water vapour) (mb).
+        ea : float
+            water vapor pressure at reference height above canopy (mb).
+        T_A_K : float
+            air temperature at reference height (Kelvin).
 
-            Returns
-            -------
-            rho : float
-                density of air (kg m-3).
+        Returns
+        -------
+        rho : float
+            density of air (kg m-3).
 
-            References
-            ----------
-            based on equation (2.6) from Brutsaert (2005): Hydrology - An Introduction (pp 25).'''
+        References
+        ----------
+        based on equation (2.6) from Brutsaert (2005): Hydrology - An Introduction (pp 25).'''
 
-            # p is multiplied by 100 to convert from mb to Pascals
-            rho = ((p * 100.0) / (R_d * T_A_K)) * (1.0 - (1.0 - epsilon) * ea / p)
-            return np.asarray(rho)
+        # p is multiplied by 100 to convert from mb to Pascals
+        rho = ((p * 100.0) / (self.R_D * T_A_K)) * (1.0 - (1.0 - self.epsilon) * ea / p)
+        return np.asarray(rho)
+    
+    def estimate_vapor_pressure(self, Ta, Rh=None):
+        """
+        Calculate actual vapor pressure (e) given temperature (T) in Celsius
+        and relative humidity (RH) as a percentage.
+        """
+        # Calculate saturation vapor pressure (es) using Magnus-Tetens formula
+        es = 6.112 * math.exp((17.67 * Ta) / (Ta + 243.5))
+        
+        if Rh is None:
+            return es
+        e = (Rh / 100) * es
+        return e
