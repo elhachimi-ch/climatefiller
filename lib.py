@@ -139,7 +139,7 @@ class Lib:
         return et0
 
     @staticmethod
-    def get_elevation_and_latitude(lat, lon):
+    def get_elevation(lat, lon):
         """
         Returns the elevation (in meters) and latitude (in degrees) for a given set of coordinates.
         Uses the Open Elevation API (https://open-elevation.com/) to obtain the elevation information.
