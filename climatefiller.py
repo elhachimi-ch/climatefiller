@@ -678,7 +678,8 @@ class ClimateFiller():
                        latitude=31.65410805,
                        longitude=-7.603140831,
                        method='pm',
-                       verbose=False
+                       verbose=False,
+                       freq='d'
                        ):
         """
         Estimates reference evapotranspiration (ET0) using the specified meteorological data and method.
@@ -709,23 +710,35 @@ class ClimateFiller():
         """
         
         et0_data = DataFrame()
-        et0_data.add_column('ta_mean', self.data.resample_timeseries(in_place=False)[air_temperture_column_name])
-        et0_data.add_column('ta_max', self.data.resample_timeseries(in_place=False, agg='max')[air_temperture_column_name])
-        et0_data.add_column('ta_min', self.data.resample_timeseries(in_place=False, agg='min')[air_temperture_column_name], )
-        et0_data.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[air_relative_humidity_column_name])
-        et0_data.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[air_relative_humidity_column_name])
-        et0_data.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[air_relative_humidity_column_name])
-        et0_data.add_column('u2_mean', self.data.resample_timeseries(in_place=False)[wind_speed_column_name])
-        et0_data.add_column('rg_mean', self.data.resample_timeseries(in_place=False)[global_solar_radiation_column_name])
-        et0_data.index_to_column()
-        et0_data.add_doy_column(self.datetime_column_name)
-        et0_data.add_one_value_column('elevation', Lib.get_elevation_and_latitude(latitude, longitude))
-        et0_data.add_one_value_column('lat', latitude)
+        if freq == 'd':
+            et0_data.add_column('ta_mean', self.data.resample_timeseries(in_place=False)[air_temperture_column_name])
+            et0_data.add_column('ta_max', self.data.resample_timeseries(in_place=False, agg='max')[air_temperture_column_name])
+            et0_data.add_column('ta_min', self.data.resample_timeseries(in_place=False, agg='min')[air_temperture_column_name], )
+            et0_data.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[air_relative_humidity_column_name])
+            et0_data.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[air_relative_humidity_column_name])
+            et0_data.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[air_relative_humidity_column_name])
+            et0_data.add_column('u2_mean', self.data.resample_timeseries(in_place=False)[wind_speed_column_name])
+            et0_data.add_column('rg_mean', self.data.resample_timeseries(in_place=False)[global_solar_radiation_column_name])
+            et0_data.index_to_column()
+            et0_data.add_doy_column(self.datetime_column_name)
+            et0_data.add_one_value_column('elevation', Lib.get_elevation_and_latitude(latitude, longitude))
+            et0_data.add_one_value_column('lat', latitude)
         
-        if method == 'pm':
-            et0_data.add_column_based_on_function('et0_pm', Lib.et0_penman_monteith)
-        elif method == 'hargreaves':
-            et0_data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
+            if method == 'pm':
+                et0_data.add_column_based_on_function('et0_pm', Lib.et0_penman_monteith)
+            elif method == 'hargreaves':
+                et0_data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
+                
+        elif freq == 'h':
+            et0_data.index_to_column()
+            et0_data.add_doy_column(self.datetime_column_name)
+            et0_data.add_one_value_column('elevation', Lib.get_elevation_and_latitude(latitude, longitude))
+            et0_data.add_one_value_column('lat', latitude)
+            
+            if method == 'pm':
+                et0_data.add_column_based_on_function('et0_pm', Lib.et0_penman_monteith_hourly)
+            elif method == 'hargreaves':
+                et0_data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
             
         self.data.set_dataframe(et0_data.get_dataframe())
         
