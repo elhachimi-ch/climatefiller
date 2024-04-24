@@ -24,6 +24,7 @@ def main():
     
     climate_filler.et0_estimation(method='pm', freq='h')
     hourly_et0 = DataFrame(climate_filler.data.dataframe, data_type='df')
+    hourly_et0.export('data/et0_hourly.csv', index=True)
     hourly_et0.column_to_date('datetime')
     hourly_et0.reindex_dataframe('datetime')
     hourly_et0.resample_timeseries(agg='sum')
