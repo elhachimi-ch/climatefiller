@@ -51,8 +51,6 @@ class ClimateFiller():
         """
         self.datetime_column_name = datetime_column_name
         
-        
-        
         self.backend = backend
         if backend == 'gee':
             ee.Initialize()
@@ -470,8 +468,6 @@ class ClimateFiller():
         else:
             pass
         
-        
-    
     def best_ml_model(self, column_to_fill_name, lon, lat, product, metric='rmse'):
         list_models = [
             LinearRegression(),
@@ -552,7 +548,6 @@ class ClimateFiller():
         self.best_model = best_model
         print(f'The Best perfoming model is: {best_model_name} with {metric.upper()}={rmse_scores[best_model_name]}')
     
-
     def missing_data_checking(self, column_name=None, verbose=True):
         """Function Name: missing_data_checking
 
@@ -674,7 +669,7 @@ class ClimateFiller():
                        air_temperture_column_name='ta',
                        global_solar_radiation_column_name='rs',
                        air_relative_humidity_column_name='rh',
-                       wind_speed_column_name='ws',
+                       wind_speed_column_name='u',
                        latitude=31.65410805,
                        longitude=-7.603140831,
                        method='pm',
@@ -721,26 +716,28 @@ class ClimateFiller():
             et0_data.add_column('rg_mean', self.data.resample_timeseries(in_place=False)[global_solar_radiation_column_name])
             et0_data.index_to_column()
             et0_data.add_doy_column(self.datetime_column_name)
-            et0_data.add_one_value_column('elevation', Lib.get_elevation_and_latitude(latitude, longitude))
+            et0_data.add_one_value_column('elevation', Lib.get_elevation(latitude, longitude))
             et0_data.add_one_value_column('lat', latitude)
         
             if method == 'pm':
                 et0_data.add_column_based_on_function('et0_pm', Lib.et0_penman_monteith)
             elif method == 'hargreaves':
                 et0_data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
+            
+            self.data.set_dataframe(et0_data.get_dataframe())
                 
         elif freq == 'h':
-            et0_data.index_to_column()
-            et0_data.add_doy_column(self.datetime_column_name)
-            et0_data.add_one_value_column('elevation', Lib.get_elevation_and_latitude(latitude, longitude))
-            et0_data.add_one_value_column('lat', latitude)
+            self.data.index_to_column()
+            self.data.add_doy_column(self.datetime_column_name)
+            self.data.add_hod_column(self.datetime_column_name)
+            self.data.add_one_value_column('elevation', Lib.get_elevation(latitude, longitude))
+            self.data.add_one_value_column('lat', latitude)
+            self.data.add_one_value_column('lon', latitude)
             
             if method == 'pm':
-                et0_data.add_column_based_on_function('et0_pm', Lib.et0_penman_monteith_hourly)
+                self.data.add_column_based_on_function('et0_pm', Lib.et0_penman_monteith_hourly)
             elif method == 'hargreaves':
-                et0_data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
-            
-        self.data.set_dataframe(et0_data.get_dataframe())
+                self.data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
         
         if verbose is True:
             print(et0_data.get_dataframe())
