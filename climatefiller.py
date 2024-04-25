@@ -719,12 +719,12 @@ class ClimateFiller():
             et0_data.add_column('u_mean', self.data.resample_timeseries(in_place=False)[u_column_name])
             et0_data.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
             et0_data.index_to_column()
-            et0_data.add_doy_column(self.datetime_column_name)
+            et0_data.add_doy_column('doy', self.datetime_column_name)
             
             if self.elevation is None:
-                self.data.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
+                et0_data.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
             else:
-                self.data.add_one_value_column('elevation', self.elevation)
+                et0_data.add_one_value_column('elevation', self.elevation)
             
             et0_data.add_one_value_column('lat', self.lat)
         
@@ -738,6 +738,8 @@ class ClimateFiller():
                     ))
             elif method == 'hargreaves':
                 et0_data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
+            elif method == 'pt':
+                et0_data.add_column_based_on_function('et0_pt', Lib.et0_priestley_taylor)
             
             self.data.set_dataframe(et0_data.get_dataframe())
                 

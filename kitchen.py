@@ -19,10 +19,8 @@ def main():
         'Sol Rad (W/sq.m)',
         'Rel Hum (%)',
         'Wind Speed (m/s)',
-        method='pm', 
-        freq='h',) 
-    climate_filler.data.reindex_dataframe('datetime',)
-    climate_filler.data.resample_timeseries(agg='sum', between_time_tuple=('8:00', '19:00'))
+        method='pt', 
+        freq='d',) 
     climate_filler.data.export('data/aa.csv', index=True)
     
     """climate_filler.et0_estimation(freq='h', method='pm')

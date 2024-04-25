@@ -16,21 +16,28 @@ from sklearn.metrics import mean_squared_error, r2_score, median_absolute_error,
 
 class Lib:
     
+    # Stephan Boltzmann constant (W m-2 K-4)
+    SB = 5.670373e-8
+    # heat capacity of dry air at constant pressure (J kg-1 K-1)
+    C_PD = 1003.5
+    # heat capacity of water vapour at constant pressure (J kg-1 K-1)
+    C_PV = 1865
+    # gas constant for dry air (rd), J/(kg*degK)
+    GAS_CONSTANT_FOR_DRY_AIR = 287.04
+    # acceleration of gravity (m s-2)
+    G = 9.8
+    # the density of water kg m-3
+    DENSITY_OF_WATER = 1000 
+    SOLAR_CONSTANT = 0.08202 # Solar constant (G_sc) in MJ/m²/min 
+    SOLAR_CONSTANT_W_PER_M2 = 1367 # Solar constant (G_sc) in W/m² 
+    ALBEDO = 0.23  # Albedo coefficient for grass reference surface
+    CP = 1.013e-3  # Specific heat of air at constant pressure (MJ/kg°C)
+    EPSILON = 0.622  # Ratio molecular weight of water vapor/dry air
+    PI = math.pi
+    
     def __init__(self, *args, **kwargs):
-        # Stephan Boltzmann constant (W m-2 K-4)
-        self.SB = 5.670373e-8
-        # heat capacity of dry air at constant pressure (J kg-1 K-1)
-        self.C_PD = 1003.5
-        # heat capacity of water vapour at constant pressure (J kg-1 K-1)
-        self.C_PV = 1865
-        # ratio of the molecular weight of water vapor to dry air
-        self.epsilon = 0.622
-        # Psicrometric Constant kPa K-1
-        self.PSIRC = 0.0658
-        # gas constant for dry air, J/(kg*degK)
-        self.R_D = 287.04
-        # acceleration of gravity (m s-2)
-        self.G = 9.8
+        pass
+         
     
     @staticmethod
     def et0_penman_monteith(
@@ -55,7 +62,7 @@ class Lib:
         G = 0  # Soil heat flux density (MJ/m2/day)
         z = 2 # Convert wind speed measured at different heights above the soil surface to wind speed at 2 m above the surface, assuming a short grass surface.
 
-        # convert units
+        # convert units 12 assume hours of day
         rs_mean *= 4.32e-2  # convert watts per square meter to megajoules per square meter 2.88e-2 = 60x60x8hours or 0.0864 for 24 hours
         ta_mean = (ta_max + ta_min) / 2
         ta_max_kelvin = ta_max + 273.16  # air temperature in Kelvin
@@ -77,25 +84,16 @@ class Lib:
         # when using equipement where errors in estimation rh min can be large or when rh data integrity are in doubt use only rh_max term
         #ea = ea_min_term  
         
-        delta = (4098 * (0.6108 * math.exp((17.27 * ta_mean) / (ta_mean + 237.3)))) / math.pow((ta_mean + 237.3), 2) # slope of the vapor pressure curve in kPa/K
+        delta = Lib.slope_vapor_pressure_curve(ta_mean) # slope of the vapor pressure curve in kPa/K
         
-        
-        atm_pressure = math.pow(((293.0 - (0.0065 * elevation)) / 293.0), 5.26) * 101.3
         # psychrometric constant in kPa/K
-        gamma = 0.000665 * atm_pressure
+        gamma = Lib.psychrometric_constant(elevation, ta_mean)
         
         # Calculate u2
         u2 = u2_mean * (4.87 / math.log((67.8 * z) - 5.42))
         
         # Calculate extraterrestrial radiation
-        dr = 1 + 0.033 * math.cos(2 * math.pi / 365 * doy)
-        d = 0.409*math.sin( (((2*math.pi) / 365) * doy) - 1.39)
-        
-        
-        # sunset hour angle
-        phi = math.radians(lat)
-        omega = math.acos(-math.tan(phi)*math.tan(d))
-        ra = ((24 * 60)/math.pi) * GSC * dr * ((omega * math.sin(phi) * math.sin(d)) + (math.cos(phi) * math.cos(d) * math.sin(omega)))
+        ra = Lib.extraterrestrial_radiation(lat, doy)
         
         # Calculate clear sky solar radiation
         rso = (0.75 + (2e-5 * elevation)) * ra
@@ -142,9 +140,6 @@ class Lib:
         
         ta_c, rs, rh, u2, lat, elevation, doy, lon, hod =  row[ta_column_name], row[rs_column_name], row[rh_column_name], row[u_column_name], row['lat'], row['elevation'], row['doy'], row['lon'], row['hod']
         
-        # constants
-        ALBEDO = 0.23  # Albedo coefficient for grass reference surface
-
         # convert units
         rs *= 3.6e-3  # convert watts per square meter to megajoules per square meter 0.0288 = 60x60x8hours or 0.0864 for 24 hours
         ta_k = ta_c + 273.16  # air temperature in Kelvin
@@ -162,16 +157,14 @@ class Lib:
         # slope of the vapor pressure curve in kPa/K
         delta = Lib.slope_vapor_pressure_curve(ta_c)
         
-        atm_pressure = Lib.pressure(elevation)
-        
         # psychrometric constant in kPa/K
-        gamma = 0.00163 * (atm_pressure / Lib.latent_heat_of_vaporization(ta_c))
+        gamma = Lib.psychrometric_constant(elevation, ta_c)
         
         # Calculate extraterrestrial radiation
         ra = Lib.extraterrestrial_radiation_hourly(doy, lat, lon, hod, standard_meridian)
         
         # Calculate net solar shortwave radiation 
-        rns = (1 - ALBEDO) * rs
+        rns = (1 - Lib.ALBEDO) * rs
         
         # Rso
         rso = Lib.rso(ra, elevation)
@@ -182,7 +175,6 @@ class Lib:
         rnl = f * epsilon_net * Lib.stephan_boltzmann(ta_c)
       
         rn = (0.77 * rns) - rnl
-        
         
         if reference_crop == 'grass':
             crop_dependent_factor = 37
@@ -223,7 +215,29 @@ class Lib:
         # output result
         return et0
     
+    @staticmethod
+    def psychrometric_constant(elevation, ta_c):
+        """
+        Calculate the psychrometric constant for a given altitude.
+
+        Parameters:
+        altitude (float): Altitude above sea level in meters.
+
+        Returns:
+        float: Psychrometric constant in kPa/°C.
+        """
+        
+        lambda_v = Lib.latent_heat_of_vaporization(ta_c)  # Latent heat of vaporization (MJ/kg)
+        
+        # Calculate atmospheric pressure based on altitude
+        p = Lib.pressure(elevation)
+        
+        # Calculate psychrometric constant
+        gamma = (Lib.CP * p) / (Lib.EPSILON * lambda_v)
+        
+        return gamma
     
+    @staticmethod
     def solar_altitude_angle(latitude, doy, hod):
         """
         Calculate the solar altitude angle based on latitude, day of the year, and local solar time.
@@ -275,7 +289,6 @@ class Lib:
             
         P0 = 101.325  # Standard atmospheric pressure at sea level in kPa
         L = 0.0065    # Standard lapse rate in °C/m
-        
         p = P0 * (((293 - (L * z)) / (293)) ** 5.26)
 
         return p
@@ -441,126 +454,6 @@ class Lib:
         return 1 + (0.033 * math.cos((2 * math.pi * doy) / 365))
     
     @staticmethod
-    def et0_penman_monteith_hourlys(row):
-        # Input variables from an hourly dataset
-        # Adjust variable names to match your data structure if necessary
-        ta, rh, u2, rs, lat, elevation, doy, hour = row['ta'], row['rh'], row['u2'], row['rs'], row['lat'], row['elevation'], row['doy'], row['hour']
-        
-        # Constants
-        ALBEDO = 0.23
-        GSC = 0.0820  # solar constant in MJ/m2/min
-        SIGMA = 0.000000004903  # Stefan-Boltzmann constant in MJ/K4/m2/hour
-        G = 0  # Assuming no soil heat flux for the hourly calculation
-
-        # Convert units: rs (solar radiation) likely needs no conversion if already in MJ/m^2/h
-        ta_kelvin = ta + 273.16  # air temperature in Kelvin
-        
-        # Saturation vapor pressure in kPa
-        es = 0.6108 * math.exp((17.27 * ta) / (ta + 237.3))
-        
-        # Actual vapor pressure in kPa
-        ea = (rh / 100) * es
-        
-        # Slope of the vapor pressure curve in kPa/K
-        delta = (4098 * es) / ((ta + 237.3) ** 2)
-        
-        # Atmospheric pressure
-        atm_pressure = (293.0 - (0.0065 * elevation)) / 293.0
-        atm_pressure = atm_pressure ** 5.26 * 101.3
-        
-        # Psychrometric constant in kPa/K
-        gamma = 0.000665 * atm_pressure
-        
-        # Adjust wind speed to 2m above the surface
-        u2_adjusted = u2 * (4.87 / math.log((67.8 * 2) - 5.42))
-        
-        # Calculate extraterrestrial radiation for the hour
-        dr = 1 + 0.033 * math.cos(2 * math.pi / 365 * doy)
-        d = 0.409 * math.sin((2 * math.pi / 365 * doy) - 1.39)
-        phi = math.radians(lat)
-        omega = math.acos(-math.tan(phi) * math.tan(d))
-        ra = ((12 * 60) / math.pi) * GSC * dr * ((omega * math.sin(phi) * math.sin(d)) + (math.cos(phi) * math.cos(d) * math.sin(omega)))
-        
-        # Calculate clear sky solar radiation
-        rso = (0.75 + (2e-5 * elevation)) * ra
-        
-        # Calculate net solar shortwave radiation
-        rns = (1 - ALBEDO) * rs
-        
-        # Calculate net longwave radiation
-        rnl = SIGMA * (ta_kelvin ** 4) * (0.34 - (0.14 * math.sqrt(ea))) * ((1.35 * (rs / rso)) - 0.35)
-        
-        # Calculate net radiation
-        rn = rns - rnl
-        
-        # Calculate ET0
-        et0 = ((0.408 * delta * (rn - G)) + gamma * ((37 / (ta + 273)) * u2_adjusted * (es - ea))) / (delta + (gamma * (1 + 0.34 * u2_adjusted)))
-
-        # Output result
-        return et0
-    
-    @staticmethod
-    def et0_penman_monteith_hourlysss(row):
-        # input variables
-        # T = 25.0  # air temperature in degrees Celsius
-        # RH = 60.0  # relative humidity in percent
-        # u2 = 2.0  # wind speed at 2 m height in m/s
-        # Rs = 15.0  # incoming solar radiation in MJ/m2/day
-        # lat = 35.0  # latitude in degrees
-        
-        ta_c, rh, u2, rs, lat, elevation, doy, lon, hod = row['ta'], row['rh'], row['u'], row['rs'], row['lat'], row['elevation'], row['doy'], row['lon'], row['hod']
-        
-        # constants
-        ALBEDO = 0.23  # Albedo coefficient for grass reference surface
-        SIGMA = 0.000000004903  # Stefan-Boltzmann constant in MJ/K4/m2/day
-        G = 0  # Soil heat flux density (MJ/m2/day)
-        z = 2 # Convert wind speed measured at different heights above the soil surface to wind speed at 2 m above the surface, assuming a short grass surface.
-
-        # convert units
-        # convert watts per square meter to megajoules per square meter 0.0288 = 60x60x8hours or 0.0864 for 24 hours or 0.0036 for 1 hour
-        rs *= 0.0036
-        ta_k = ta_c + 273.15
-        
-        # saturation vapor pressure in kPa
-        es = 0.6108 * math.exp((17.27 * ta_c) / (ta_c + 237.3))
-        #es = 0.1 * (6.112 * math.exp((17.67 * ta_c) / (ta_c + 243.5)))
-        
-        # actual vapor pressure in kPa
-        ea = es * (rh / 100)
-        
-        delta = (4098 * es) / math.pow((ta_c + 237.3), 2) # slope of the vapor pressure curve in kPa/K
-        
-        
-        atm_pressure = math.pow(((293.0 - (0.0065 * elevation)) / 293.0), 5.26) * 101.3
-        # psychrometric constant in kPa/K
-        gamma = 0.000665 * atm_pressure
-        
-        # Calculate u2
-        u2 = u2 * (4.87 / math.log((67.8 * z) - 5.42))
-        
-        ra = Lib.extraterrestrial_radiation_hourly(doy, hod, lon, lat, timezone=1)
-        
-        ra *= 0.0036
-        
-        # Calculate clear sky solar radiation
-        rso = (0.75 + (2e-5 * elevation)) * ra
-        
-        # Calculate net solar shortwave radiation 
-        rns = (1 - ALBEDO) * rs
-        
-      
-        # Calculate net longwave radiation
-        rnl = Lib.net_longwave_radiation(ta_c, rh, rs, rso)
-        
-        # Calculate net radiation
-        rn = rns - rnl
-        
-        et0 = ((0.408 * delta * (rn - G)) + gamma * ((37 / (ta_c + 273)) * u2 * (es - ea))) / (delta + (gamma * (1 + 0.34 * u2)))
-
-        # output result
-        return et0
-    
-    @staticmethod
     def net_longwave_radiation(ta_c, rh, rs, rso, epsilon=0.95):
         """
         Calculate the net longwave radiation, adjusting sky temperature based on empirical methods.
@@ -612,7 +505,7 @@ class Lib:
         omega = math.acos(-math.tan(phi)*math.tan(d))
         ra = ((24 * 60)/math.pi) * GSC * dr * ((omega * math.sin(phi) * math.sin(d)) + (math.cos(phi) * math.cos(d) * math.sin(omega)))
         
-        et0 = 0.0023 * (ta_mean + 17.8) * (ta_max - ta_min) ** 0.5 * 0.408 * ra
+        et0 = 0.0023 * (ta_mean + 17.8) * ((ta_max - ta_min) ** 0.5) * 0.408 * ra
 
         return et0
 
@@ -644,7 +537,7 @@ class Lib:
         return ws
     
     @staticmethod
-    def slope_vapor_pressure_curve(t_c):
+    def slope_vapor_pressure_curve(t_c, method='standard'):
         """
         Calculate the slope of the saturation vapor pressure curve at a given temperature.
         
@@ -662,6 +555,24 @@ class Lib:
         return delta
     
     @staticmethod
+    def calculate_slope_of_saturation_vapor_pressure(ta_c):
+        # Constants
+        L = 2260 * 1000  # Latent heat of vaporization for water (J/kg)
+        R_v = 461.5      # Specific gas constant for water vapor (J/(kg*K))
+        ta_k = ta_c + 273.15  # Convert Celsius to Kelvin
+        
+        # Tetens formula to approximate saturation vapor pressure in hPa
+        e_s = 6.112 * math.exp((17.67 * ta_c) / (ta_c + 243.5))
+        
+        # Clausius-Clapeyron equation to calculate the slope (d es/dT)
+        slope = (L * e_s) / (R_v * ta_k**2)
+        
+        # Convert slope from Pa/K to hPa/K for practical purposes
+        slope_hPa_per_K = slope / 100
+        
+        return slope_hPa_per_K
+    
+    @staticmethod
     def extraterrestrial_radiation_hourly(doy, latitude, longitude, hod, standard_meridian):
         """
         Calculate hourly extraterrestrial radiation (Ra) using Duffie and Beckman's approach and G_sc in MJ/m²/min.
@@ -676,9 +587,6 @@ class Lib:
         Returns:
         - Ra_h: float, hourly extraterrestrial radiation in MJ/m^2
         """
-        G_sc = 0.08202  # Solar constant in MJ/m²/min
-        pi = math.pi
-        
         # Convert latitude and longitude from degrees to radians
         latitude_rad = math.radians(latitude)
         
@@ -686,18 +594,18 @@ class Lib:
         delta = Lib.solar_declination(doy)
         
         # Equation of Time in minutes
-        B = ((2 * pi) / 364) * (doy - 81)
+        B = ((2 * Lib.PI) / 364) * (doy - 81)
         EOT = 0.1645 * math.sin(2 * B) - 0.1255 * math.cos(B) - 0.025 * math.sin(B)
         
         # Adjust local time to solar time
-        omega = (pi/12) * (((hod - 0.5) - ((4/60) * (longitude - standard_meridian) + EOT)) - 12 )
+        omega = (Lib.PI/12) * (((hod - 0.5) - ((4/60) * (longitude - standard_meridian) + EOT)) - 12 )
         
         # Calculate solar time angles at the start and end of the hour
-        omega_1 = omega - (0.5 * (pi/2))
-        omega_2 = omega + (0.5 * (pi/2))
+        omega_1 = omega - (0.5 * (Lib.PI/2))
+        omega_2 = omega + (0.5 * (Lib.PI/2))
         
         # Hourly extraterrestrial radiation calculation
-        Ra_h = ((12 * 60) / pi) * G_sc * Lib.inverse_relative_distance_factor(doy) * ((omega_2 - omega_1) * math.sin(latitude_rad) * math.sin(delta) + math.cos(latitude_rad) * math.cos(delta) * (math.sin(omega_2) - math.sin(omega_1)))
+        Ra_h = ((12 * 60) / Lib.PI) * Lib.SOLAR_CONSTANT * Lib.inverse_relative_distance_factor(doy) * ((omega_2 - omega_1) * math.sin(latitude_rad) * math.sin(delta) + math.cos(latitude_rad) * math.cos(delta) * (math.sin(omega_2) - math.sin(omega_1)))
         
         return Ra_h
     
@@ -716,56 +624,70 @@ class Lib:
         declination_radians = 0.409 * math.sin(((2 * math.pi * doy) / 365) - 1.39)
 
         return declination_radians
-    
+  
     @staticmethod
-    def extraterrestrial_radiation_hourly_old(doy, hod, lon, lat, timezone=1):
+    def extraterrestrial_radiation(lat, doy):
         """
-        Calculate hourly extraterrestrial radiation at a specific hour and location.
+        Calculate extraterrestrial radiation (Ra) for a given latitude and day of the year.
 
         Parameters:
-        doy (int): Day of the year.
-        hod (int): Hour of the day (0-23).
-        latitude (float): Latitude in degrees.
-        longitude (float): Longitude in degrees.
-        timezone (int): Timezone offset from UTC.
+        lat (float): Latitude in degrees. Positive for the northern hemisphere, negative for southern.
+        doy (int): Day of the year (1 through 365 or 366).
 
         Returns:
-        float: Hourly extraterrestrial radiation in W/m^2.
+        float: Extraterrestrial radiation in MJ/m^2/day.
         """
-        # Constants
-        I_sc = 1367  # Solar constant in W/m^2
-        rad = math.pi / 180  # Convert degrees to radians
-
+        
         # Convert latitude to radians
-        phi = lat * rad
+        latitude = math.radians(lat)
+        
+        # Calculate the inverse relative distance Earth-Sun (dr)
+        dr = 1 + (0.033 * math.cos((2 * math.pi * doy) / 365))
+        
+        # Calculate the solar declination (δ):
+        delta = 0.409 * math.sin(((2 * math.pi * doy) / 365) - 1.39)
+        
+        # Calculate the sunset hour angle
+        ws = math.acos(-math.tan(latitude) * math.tan(delta))
+        
+        # Calculate the extraterrestrial radiation
+        ra = ((24 * 60) / math.pi) * Lib.SOLAR_CONSTANT * dr * ((ws * math.sin(latitude) * math.sin(delta)) + (math.cos(latitude) * math.cos(delta) * math.sin(ws)))
+        
+        return ra
+    
+    @staticmethod
+    def et0_priestley_taylor(row):
+        """
+        Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
-        # Calculate B for the equation of time
-        B = (2 * math.pi * (doy - 81)) / 365
+        Parameters:
+        alpha (float): Empirical coefficient, typically around 1.26.
+        Delta (float): Slope of the saturation vapor pressure curve at air temperature (kPa/°C).
+        gamma (float): Psychrometric constant (kPa/°C).
+        Rn (float): Net radiation at the crop surface (MJ/m²/day).
+        G (float): Soil heat flux (MJ/m²/day), often assumed to be zero for daily calculations.
 
-        # Equation of Time (EOT)
-        EOT = 9.87 * math.sin(2 * B) - 7.53 * math.cos(B) - 1.5 * math.sin(B)
-
-        # Local Standard Time Meridian
-        LCM = 15 * timezone
-
-        # Time correction factor
-        TC = 4 * (lon - LCM) + EOT
-
-        # Solar hour angle
-        omega = 15 * (hod + (TC / 60) - 12)
-        omega_rad = omega * rad
-
-        # Solar declination
-        delta = 0.409 * math.sin((2 * math.pi * (doy - 81)) / 365)
-
-        # Solar zenith angle
-        cos_theta = math.sin(phi) * math.sin(delta) + math.cos(phi) * math.cos(delta) * math.cos(omega_rad)
-
-        # Check if the sun is below the horizon
-        if cos_theta <= 0:
-            return 0  # No extraterrestrial radiation if the sun is not above the horizon
-
-        # Extraterrestrial radiation
-        I_0 = I_sc * cos_theta
-
-        return I_0
+        Returns:
+        float: Estimated ET0 in mm/day.
+        """
+        
+        ta_c = row['ta_mean']
+        
+        seconds_per_day = 43200 # 43200 for 12 hours number of seconds in a day 86400 for 24 hours
+        
+        # Conversion from W/m² to kJ/m²/day
+        rs_kj_per_m2 = (row['rs_mean'] * seconds_per_day) / 1000  # Convert joules to kilojoules
+        
+        #elevation = row['elevation']
+        GHO = Lib.DENSITY_OF_WATER
+        lambda_v = 2266
+        DELTA = 4.95e-4
+        
+        
+        if ta_c < 0:
+            slope = 0.3405 * (math.exp(0.06642 * ta_c))
+        else:
+            slope = 0.3221 * (math.exp(0.0803 * (ta_c ** 0.8876)))
+        
+        et0 = ((1.3) / (lambda_v * GHO)) * ((slope)/(slope + DELTA)) * rs_kj_per_m2
+        return et0 * 1000
