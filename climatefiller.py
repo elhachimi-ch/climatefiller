@@ -736,6 +736,7 @@ class ClimateFiller():
             
             if method == 'pm':
                 self.data.add_column_based_on_function('et0_pm', Lib.et0_penman_monteith_hourly)
+                self.data.transform_column('et0_pm', lambda o: o if o > 0 else 0)
             elif method == 'hargreaves':
                 self.data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
         

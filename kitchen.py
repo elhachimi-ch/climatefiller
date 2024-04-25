@@ -13,6 +13,11 @@ def main():
                                    backend='gee',
                                    datetime_column_name='datetime')
     
+    """climate_filler.et0_estimation(freq='h', method='pm')
+    climate_filler.data.reindex_dataframe('datetime')
+    climate_filler.data.resample_timeseries(agg='sum')
+    climate_filler.data.export('data/et0.csv', index=True)"""
+    
     """climate_filler.data.resample_timeseries(skip_rows=2)
     climate_filler.data.drop_columns(['wd'])
     climate_filler.fill('ta')
