@@ -9,9 +9,19 @@ def main():
     # Read the time series 
     #data.reindex_dataframe('datetime')
     
-    climate_filler = ClimateFiller('data/r3_era5land_imputed.csv', 
+    climate_filler = ClimateFiller(r"D:\projects\pythonsnippets\data\sidi_rahal\cimis_data.csv", 
                                    backend='gee',
                                    datetime_column_name='datetime')
+    climate_filler.et0_estimation(
+        'Air Temp (C)',
+        'Sol Rad (W/sq.m)',
+        'Rel Hum (%)',
+        'Wind Speed (m/s)',
+        method='pm', 
+        freq='h',
+        lon=-121.760557,
+        lat=38.058023), 
+    climate_filler.data.export('data/aa.csv', index=True)
     
     """climate_filler.et0_estimation(freq='h', method='pm')
     climate_filler.data.reindex_dataframe('datetime')

@@ -33,7 +33,12 @@ class Lib:
         self.G = 9.8
     
     @staticmethod
-    def et0_penman_monteith(row):
+    def et0_penman_monteith(
+        row,
+        ta_column_name,
+        rs_column_name,
+        rh_column_name,
+        u_column_name):
         # input variables
         # T = 25.0  # air temperature in degrees Celsius
         # RH = 60.0  # relative humidity in percent
@@ -41,7 +46,7 @@ class Lib:
         # Rs = 15.0  # incoming solar radiation in MJ/m2/day
         # lat = 35.0  # latitude in degrees
         
-        ta_max, ta_min, rh_max, rh_min, u2_mean, rs_mean, lat, elevation, doy =  row['ta_max'], row['ta_min'], row['rh_max'], row['rh_min'], row['u2_mean'], row['rg_mean'], row['lat'], row['elevation'], row['doy']
+        ta_max, ta_min, rh_max, rh_min, u2_mean, rs_mean, lat, elevation, doy =  row['ta_max'], row['ta_min'], row['rh_max'], row['rh_min'], row['u_mean'], row['rs_mean'], row['lat'], row['elevation'], row['doy']
         
         # constants
         ALBEDO = 0.23  # Albedo coefficient for grass reference surface
@@ -119,7 +124,14 @@ class Lib:
         return et0
     
     @staticmethod
-    def et0_penman_monteith_hourly(row):
+    def et0_penman_monteith_hourly(
+        row,
+        ta_column_name,
+        rs_column_name,
+        rh_column_name,
+        u_column_name,
+        standard_meridian
+        ):
         # input variables
         # T = 25.0  # air temperature in degrees Celsius
         # RH = 60.0  # relative humidity in percent
@@ -127,7 +139,7 @@ class Lib:
         # Rs = 15.0  # incoming solar radiation in MJ/m2/day
         # lat = 35.0  # latitude in degrees
         
-        ta_c, rh, u2, rs, lat, elevation, doy, lon, hod =  row['ta'], row['rh'], row['u'], row['rs'], row['lat'], row['elevation'], row['doy'], row['lon'], row['hod']
+        ta_c, rs, rh, u2, lat, elevation, doy, lon, hod =  row[ta_column_name], row[rs_column_name], row[rh_column_name], row[u_column_name], row['lat'], row['elevation'], row['doy'], row['lon'], row['hod']
         
         # constants
         ALBEDO = 0.23  # Albedo coefficient for grass reference surface
@@ -155,7 +167,7 @@ class Lib:
         gamma = 0.00163 * (atm_pressure / Lib.latent_heat_of_vaporization(ta_c))
         
         # Calculate extraterrestrial radiation
-        ra = Lib.extraterrestrial_radiation_hourly(doy, lat, lon, hod)
+        ra = Lib.extraterrestrial_radiation_hourly(doy, lat, lon, hod, standard_meridian)
         
         # Calculate net solar shortwave radiation 
         rns = (1 - ALBEDO) * rs
@@ -232,7 +244,6 @@ class Lib:
         solar_altitude = math.degrees(solar_altitude_rad)
 
         return solar_altitude
-    
     
     @staticmethod
     def pressure(z):
@@ -637,7 +648,7 @@ class Lib:
         return delta
     
     @staticmethod
-    def extraterrestrial_radiation_hourly(doy, latitude, longitude, hod, standard_meridian=0):
+    def extraterrestrial_radiation_hourly(doy, latitude, longitude, hod, standard_meridian):
         """
         Calculate hourly extraterrestrial radiation (Ra) using Duffie and Beckman's approach and G_sc in MJ/m²/min.
         

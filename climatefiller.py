@@ -27,7 +27,9 @@ class ClimateFiller():
     """The ClimateFiller class
     """
     
-    def __init__(self, data_link=None, data_type='csv', datetime_column_name='datetime', datetime_format='%Y-%m-%d %H:%M:%S', backend=None, **kwargs):
+    def __init__(self, data_link=None, data_type='csv', datetime_column_name='datetime', 
+                 datetime_format='%Y-%m-%d %H:%M:%S', backend=None, 
+                 lat=31.65410805, lon=-7.603140831, standard_meridian=0, **kwargs):
         """
         Initializes an instance of the class with the specified parameters.
 
@@ -50,7 +52,9 @@ class ClimateFiller():
             - If data_link is not provided, the instance will be initialized without any data source.
         """
         self.datetime_column_name = datetime_column_name
-        
+        self.lat=lat,
+        self.lon=lon,
+        self.standard_meridian=standard_meridian,
         self.backend = backend
         if backend == 'gee':
             ee.Initialize()
@@ -666,15 +670,13 @@ class ClimateFiller():
         plt.show()
     
     def et0_estimation(self, 
-                       air_temperture_column_name='ta',
-                       global_solar_radiation_column_name='rs',
-                       air_relative_humidity_column_name='rh',
-                       wind_speed_column_name='u',
-                       latitude=31.65410805,
-                       longitude=-7.603140831,
+                       ta_column_name='ta',
+                       rs_column_name='rs',
+                       rh_column_name='rh',
+                       u_column_name='u',
                        method='pm',
                        verbose=False,
-                       freq='d'
+                       freq='d',
                        ):
         """
         Estimates reference evapotranspiration (ET0) using the specified meteorological data and method.
@@ -706,21 +708,27 @@ class ClimateFiller():
         
         et0_data = DataFrame()
         if freq == 'd':
-            et0_data.add_column('ta_mean', self.data.resample_timeseries(in_place=False)[air_temperture_column_name])
-            et0_data.add_column('ta_max', self.data.resample_timeseries(in_place=False, agg='max')[air_temperture_column_name])
-            et0_data.add_column('ta_min', self.data.resample_timeseries(in_place=False, agg='min')[air_temperture_column_name], )
-            et0_data.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[air_relative_humidity_column_name])
-            et0_data.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[air_relative_humidity_column_name])
-            et0_data.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[air_relative_humidity_column_name])
-            et0_data.add_column('u2_mean', self.data.resample_timeseries(in_place=False)[wind_speed_column_name])
-            et0_data.add_column('rg_mean', self.data.resample_timeseries(in_place=False)[global_solar_radiation_column_name])
+            et0_data.add_column('ta_mean', self.data.resample_timeseries(in_place=False)[ta_column_name])
+            et0_data.add_column('ta_max', self.data.resample_timeseries(in_place=False, agg='max')[ta_column_name])
+            et0_data.add_column('ta_min', self.data.resample_timeseries(in_place=False, agg='min')[ta_column_name], )
+            et0_data.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[rh_column_name])
+            et0_data.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[rh_column_name])
+            et0_data.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
+            et0_data.add_column('u_mean', self.data.resample_timeseries(in_place=False)[u_column_name])
+            et0_data.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
             et0_data.index_to_column()
             et0_data.add_doy_column(self.datetime_column_name)
-            et0_data.add_one_value_column('elevation', Lib.get_elevation(latitude, longitude))
-            et0_data.add_one_value_column('lat', latitude)
+            et0_data.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
+            et0_data.add_one_value_column('lat', self.lat)
         
             if method == 'pm':
-                et0_data.add_column_based_on_function('et0_pm', Lib.et0_penman_monteith)
+                self.data.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith(
+                    row, 
+                    ta_column_name,
+                    rs_column_name,
+                    rh_column_name,
+                    u_column_name
+                    ))
             elif method == 'hargreaves':
                 et0_data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
             
@@ -728,14 +736,21 @@ class ClimateFiller():
                 
         elif freq == 'h':
             self.data.index_to_column()
-            self.data.add_doy_column(self.datetime_column_name)
-            self.data.add_hod_column(self.datetime_column_name)
-            self.data.add_one_value_column('elevation', Lib.get_elevation(latitude, longitude))
-            self.data.add_one_value_column('lat', latitude)
-            self.data.add_one_value_column('lon', latitude)
+            self.data.add_doy_column(datetime_column_name=self.datetime_column_name)
+            self.data.add_hod_column(datetime_column_name=self.datetime_column_name)
+            self.data.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
+            self.data.add_one_value_column('lat', self.lat)
+            self.data.add_one_value_column('lon', self.lat)
             
             if method == 'pm':
-                self.data.add_column_based_on_function('et0_pm', Lib.et0_penman_monteith_hourly)
+                self.data.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith_hourly(
+                    row, 
+                    ta_column_name,
+                    rs_column_name,
+                    rh_column_name,
+                    u_column_name,
+                    self.standard_meridian
+                    ))
                 self.data.transform_column('et0_pm', lambda o: o if o > 0 else 0)
             elif method == 'hargreaves':
                 self.data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
@@ -1206,8 +1221,6 @@ class ClimateFiller():
         """
         self.data.export(path_link, data_type, kwargs)
         
-  
-  
     def download_era5_land_data_by_years(self, variables, lon, lat, start_date, end_date):
         point = ee.Geometry.Point(lon, lat)
         era5_land = ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY').filterBounds(point)
@@ -1257,7 +1270,6 @@ class ClimateFiller():
                                     cf.download(variable, start_datetime, start_datetime + next_year, longitude, latitude)"""
         
         #output_path = 'data/' + '_'.join([str(s) for s in variables] + [str(lon), str(lat), str(actual_year)]) + '.csv'
-        
     
     @staticmethod
     def extract_datetime(row):
