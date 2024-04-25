@@ -27,7 +27,7 @@ def main():
     climate_filler.fill('p')
     climate_filler.export('data/r3_era5land_imputed.csv', index=True)"""
     
-    climate_filler.et0_estimation(method='pm', freq='h')
+    """climate_filler.et0_estimation(method='pm', freq='h')
     hourly_et0 = DataFrame(climate_filler.data.dataframe, data_type='df')
     hourly_et0.export('data/et0_hourly.csv', index=True)
     hourly_et0.column_to_date('datetime')
@@ -42,7 +42,7 @@ def main():
     print(daily_et0.show())
     daily_et0.add_column('et0_from_hourly', hourly_et0.get_column('et0_pm'))
     
-    daily_et0.export('data/et0pm.csv', index=True)
+    daily_et0.export('data/et0pm.csv', index=True)"""
 
     #climate_filler.data.resample_timeseries(frequency='H')
     #climate_filler.data.rename_columns({'R3_Tair':'ta'})
