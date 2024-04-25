@@ -29,7 +29,7 @@ class ClimateFiller():
     
     def __init__(self, data_link=None, data_type='csv', datetime_column_name='datetime', 
                  datetime_format='%Y-%m-%d %H:%M:%S', backend=None, 
-                 lat=31.65410805, lon=-7.603140831, standard_meridian=0, **kwargs):
+                 lat=31.65410805, lon=-7.603140831, standard_meridian=0, elevation=None, **kwargs):
         """
         Initializes an instance of the class with the specified parameters.
 
@@ -52,9 +52,10 @@ class ClimateFiller():
             - If data_link is not provided, the instance will be initialized without any data source.
         """
         self.datetime_column_name = datetime_column_name
-        self.lat=lat,
-        self.lon=lon,
-        self.standard_meridian=standard_meridian,
+        self.lat = lat
+        self.lon = lon
+        self.standard_meridian = standard_meridian
+        self.elevation = elevation
         self.backend = backend
         if backend == 'gee':
             ee.Initialize()
@@ -677,6 +678,7 @@ class ClimateFiller():
                        method='pm',
                        verbose=False,
                        freq='d',
+                       reference_crop='grass'
                        ):
         """
         Estimates reference evapotranspiration (ET0) using the specified meteorological data and method.
@@ -718,7 +720,12 @@ class ClimateFiller():
             et0_data.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
             et0_data.index_to_column()
             et0_data.add_doy_column(self.datetime_column_name)
-            et0_data.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
+            
+            if self.elevation is None:
+                self.data.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
+            else:
+                self.data.add_one_value_column('elevation', self.elevation)
+            
             et0_data.add_one_value_column('lat', self.lat)
         
             if method == 'pm':
@@ -738,7 +745,12 @@ class ClimateFiller():
             self.data.index_to_column()
             self.data.add_doy_column(datetime_column_name=self.datetime_column_name)
             self.data.add_hod_column(datetime_column_name=self.datetime_column_name)
-            self.data.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
+            
+            if self.elevation is None:
+                self.data.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
+            else:
+                self.data.add_one_value_column('elevation', self.elevation)
+                
             self.data.add_one_value_column('lat', self.lat)
             self.data.add_one_value_column('lon', self.lat)
             
@@ -749,7 +761,8 @@ class ClimateFiller():
                     rs_column_name,
                     rh_column_name,
                     u_column_name,
-                    self.standard_meridian
+                    self.standard_meridian,
+                    reference_crop
                     ))
                 self.data.transform_column('et0_pm', lambda o: o if o > 0 else 0)
             elif method == 'hargreaves':

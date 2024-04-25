@@ -11,16 +11,18 @@ def main():
     
     climate_filler = ClimateFiller(r"D:\projects\pythonsnippets\data\sidi_rahal\cimis_data.csv", 
                                    backend='gee',
-                                   datetime_column_name='datetime')
+                                   datetime_column_name='datetime',
+                                   lat=38.535694, lon=-121.776360, standard_meridian=-120, elevation=18.288
+                                   )
     climate_filler.et0_estimation(
         'Air Temp (C)',
         'Sol Rad (W/sq.m)',
         'Rel Hum (%)',
         'Wind Speed (m/s)',
         method='pm', 
-        freq='h',
-        lon=-121.760557,
-        lat=38.058023), 
+        freq='h',) 
+    climate_filler.data.reindex_dataframe('datetime',)
+    climate_filler.data.resample_timeseries(agg='sum', between_time_tuple=('8:00', '19:00'))
     climate_filler.data.export('data/aa.csv', index=True)
     
     """climate_filler.et0_estimation(freq='h', method='pm')

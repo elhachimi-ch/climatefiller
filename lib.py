@@ -130,7 +130,8 @@ class Lib:
         rs_column_name,
         rh_column_name,
         u_column_name,
-        standard_meridian
+        standard_meridian,
+        reference_crop,
         ):
         # input variables
         # T = 25.0  # air temperature in degrees Celsius
@@ -182,14 +183,27 @@ class Lib:
       
         rn = (0.77 * rns) - rnl
         
-        if rn > 0:
-            g = 0.1 * rn
-            # Bulk surface resistance and aerodynamic resistance coefficient
-            CD = 0.24 
-        else:
-            g = 0.5 * rn
-            # Bulk surface resistance and aerodynamic resistance coefficient
-            CD = 0.96 
+        
+        if reference_crop == 'grass':
+            crop_dependent_factor = 37
+            if rn > 0:
+                g = 0.1 * rn
+                # Bulk surface resistance and aerodynamic resistance coefficient
+                CD = 0.24 
+            else:
+                g = 0.5 * rn
+                # Bulk surface resistance and aerodynamic resistance coefficient
+                CD = 0.96 
+        elif reference_crop == 'alfalfa':
+            crop_dependent_factor = 66
+            if rn > 0:
+                g = 0.01 * rn
+                # Bulk surface resistance and aerodynamic resistance coefficient
+                CD = 0.25 
+            else:
+                g = 0.2 * rn
+                # Bulk surface resistance and aerodynamic resistance coefficient
+                CD = 1.7
             
             
         # decompose et0 to two terms to facilitate the calculation
@@ -201,7 +215,7 @@ class Lib:
         radiation_term =(radiation) / (denominator * lambda_heat)
         
         # Aerodynamic Term
-        aerodynamic_term = (gamma * ((37) / (ta_k)) * u2 * (es - ea)) / denominator
+        aerodynamic_term = (gamma * ((crop_dependent_factor) / (ta_k)) * u2 * (es - ea)) / denominator
         
         
         et0 = radiation_term + aerodynamic_term
