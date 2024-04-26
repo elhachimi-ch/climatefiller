@@ -729,7 +729,7 @@ class ClimateFiller():
             et0_data.add_one_value_column('lat', self.lat)
         
             if method == 'pm':
-                self.data.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith(
+                et0_data.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith(
                     row, 
                     ta_column_name,
                     rs_column_name,
@@ -767,8 +767,8 @@ class ClimateFiller():
                     reference_crop
                     ))
                 self.data.transform_column('et0_pm', lambda o: o if o > 0 else 0)
-            elif method == 'hargreaves':
-                self.data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
+            elif method == 'pt':
+                self.data.add_column_based_on_function('et0_hargreaves', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
         
         if verbose is True:
             print(et0_data.get_dataframe())

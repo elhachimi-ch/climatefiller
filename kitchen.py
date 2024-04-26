@@ -19,8 +19,9 @@ def main():
         'Sol Rad (W/sq.m)',
         'Rel Hum (%)',
         'Wind Speed (m/s)',
-        method='pt', 
+        method='pm', 
         freq='d',) 
+    
     climate_filler.data.export('data/aa.csv', index=True)
     
     """climate_filler.et0_estimation(freq='h', method='pm')
