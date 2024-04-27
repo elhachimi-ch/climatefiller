@@ -9,6 +9,14 @@ def main():
     # Read the time series 
     #data.reindex_dataframe('datetime')
     
+    et0_pm_daily_california_data = DataFrame('D:\projects\pythonsnippets\data\sidi_rahal\cimis_data.csv')
+    et0_pm_daily_california_data.column_to_date('datetime')
+    et0_pm_daily_california_data.reindex_dataframe('datetime')
+    et0_pm_daily_california_data.resample_timeseries(agg='sum')
+    et0_pm_daily_california_data.keep_columns('PM ETo (mm)')
+    et0_pm_daily_california_data.show()
+    
+    
     climate_filler = ClimateFiller(r"D:\projects\pythonsnippets\data\sidi_rahal\cimis_data.csv", 
                                    backend='gee',
                                    datetime_column_name='datetime',
@@ -20,7 +28,10 @@ def main():
         'Rel Hum (%)',
         'Wind Speed (m/s)',
         method='pm', 
-        freq='d',) 
+        freq='h',)
+    
+    climate_filler.data.reindex_dataframe('datetime')
+    climate_filler.data.resample_timeseries(agg='sum', between_time_tuple=('09:00:00', '18:00:00'))
     
     cimis_dataset = DataFrame('D:\projects\pythonsnippets\data\sidi_rahal\cimis_data.csv')
     cimis_dataset.column_to_date('datetime')
@@ -30,9 +41,9 @@ def main():
     cimis_dataset.rename_columns({'Sol Rad (W/sq.m)': 'rs', 'Rel Hum (%)': 'rh', 'Air Temp (C)': 'ta', 'Wind Speed (m/s)': 'u'})
     cimis_dataset.resample_timeseries()
     
-    climate_filler.data.reindex_dataframe('datetime')
     climate_filler.data.keep_columns(['et0_pm'])
     cimis_dataset.join(climate_filler.data.dataframe)
+    cimis_dataset.join(et0_pm_daily_california_data.get_dataframe())
     
     climate_filler = ClimateFiller(r"D:\projects\pythonsnippets\data\sidi_rahal\cimis_data.csv", 
                                    backend='gee',
@@ -50,7 +61,12 @@ def main():
     climate_filler.data.reindex_dataframe('datetime')
     cimis_dataset.join(climate_filler.data.dataframe)
     
-    cimis_dataset.export('data/cimis_et0_pm_pt_daily.csv', index=True)
+    print(f"PM: {cimis_dataset.similarity_measure('PM ETo (mm)', 'et0_pm', 'ts')}")
+    print(f"PT: {cimis_dataset.similarity_measure('PM ETo (mm)', 'et0_pt', 'ts')}")
+    print(f"PT vs PM: {cimis_dataset.similarity_measure('et0_pm', 'et0_pt', 'ts')}")
+    
+    
+    #cimis_dataset.export('data/cimis_et0_pm_pt_daily.csv', index=True)
     
     """climate_filler.et0_estimation(freq='h', method='pm')
     climate_filler.data.reindex_dataframe('datetime')

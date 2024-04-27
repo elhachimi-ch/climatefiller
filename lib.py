@@ -102,6 +102,7 @@ class Lib:
         rns = (1 - ALBEDO) * rs_mean
         
         # Calculate net longwave radiation
+        
         rnl = SIGMA * (((math.pow(ta_max_kelvin, 4) + math.pow(ta_min_kelvin, 4)) / 2) * (0.34 - (0.14 * math.sqrt(ea))) * ((1.35 * (rs_mean / rso)) - 0.35))
         
         # Calculate net radiation
