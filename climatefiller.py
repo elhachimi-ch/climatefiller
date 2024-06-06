@@ -27,7 +27,9 @@ class ClimateFiller():
     """The ClimateFiller class
     """
     
-    def __init__(self, data_link=None, data_type='csv', datetime_column_name='datetime', datetime_format='%Y-%m-%d %H:%M:%S', backend=None, **kwargs):
+    def __init__(self, data_link=None, data_type='csv', datetime_column_name='datetime', 
+                 datetime_format='%Y-%m-%d %H:%M:%S', backend=None, 
+                 lat=31.65410805, lon=-7.603140831, standard_meridian=0, elevation=None, **kwargs):
         """
         Initializes an instance of the class with the specified parameters.
 
@@ -50,9 +52,10 @@ class ClimateFiller():
             - If data_link is not provided, the instance will be initialized without any data source.
         """
         self.datetime_column_name = datetime_column_name
-        
-        
-        
+        self.lat = lat
+        self.lon = lon
+        self.standard_meridian = standard_meridian
+        self.elevation = elevation
         self.backend = backend
         if backend == 'gee':
             ee.Initialize()
@@ -164,6 +167,8 @@ class ClimateFiller():
                 era5_land_variables = ['surface_solar_radiation_downwards']
             elif column_to_fill_name == 'ws':
                 era5_land_variables = ['10m_u_component_of_wind', '10m_v_component_of_wind']
+            elif column_to_fill_name == 'p':
+                era5_land_variables = ['total_precipitation']
                 
                 
             from data_science_toolkit.gis import GIS
@@ -199,14 +204,14 @@ class ClimateFiller():
                 missing_data_dict['day'] = list(missing_data_dict['day'])
                 missing_data_dates[y] = missing_data_dict
                 for month in missing_data_dict['month']:
-                    if len(era5_land_variables) == 1:
-                        data_month_path = 'data\era5land_' + column_to_fill_name + '_' + str(lon) + '_' + str(lat) + '_' + str(y) + '_' + month + '.grib'
+                    for p in era5_land_variables:
+                        data_month_path = 'data\era5land_' + p + '_' + str(lon) + '_' + str(lat) + '_' + str(y) + '_' + month + '.grib'
                         if os.path.exists(data_month_path) is False:
                             c.retrieve(
                             'reanalysis-era5-land',
                             {
                                 'format': 'grib',
-                                'variable': era5_land_variables,
+                                'variable': p,
                                 'year': str(y),
                                 'month':  month,
                                 'day': missing_data_dict['day'],
@@ -220,41 +225,11 @@ class ClimateFiller():
                                     '18:00', '19:00', '20:00',
                                     '21:00', '22:00', '23:00',
                                 ],
-                                'area': [
-                                    lat, lon, lat,
-                                    lon
-                                ],
+                                'area': [lat, lon, lat, lon],
                             },
                             data_month_path)
                         else:
                             print(f'Data of {y}-{month} found in {data_month_path}')
-                    else:
-                        for p in era5_land_variables:
-                            if os.path.exists('data\era5land_' + column_to_fill_name + '_' + str(lon) + '_' + str(lat) + '_' + str(y) + '_' + month + '.grib') is False:
-                                c.retrieve(
-                                'reanalysis-era5-land',
-                                {
-                                    'format': 'grib',
-                                    'variable': p,
-                                    'year': str(y),
-                                    'month':  month,
-                                    'day': missing_data_dict['day'],
-                                    'time': [
-                                        '00:00', '01:00', '02:00',
-                                        '03:00', '04:00', '05:00',
-                                        '06:00', '07:00', '08:00',
-                                        '09:00', '10:00', '11:00',
-                                        '12:00', '13:00', '14:00',
-                                        '15:00', '16:00', '17:00',
-                                        '18:00', '19:00', '20:00',
-                                        '21:00', '22:00', '23:00',
-                                    ],
-                                    'area': [
-                                        lat, lon, lat,
-                                        lon
-                                    ],
-                                },
-                                'data\era5land_' + column_to_fill_name + '_' + str(lon) + '_' + str(lat) + '_' + str(y) + '_' + month + '.grib')
                         
             
             gis = GIS()
@@ -299,12 +274,16 @@ class ClimateFiller():
             elif column_to_fill_name == 'rh':
                 data_t2m = DataFrame()
                 data_d2m = DataFrame()
+                
                 for year in missing_data_dates:
                     for month in missing_data_dates[year]['month']:
-                        data_t2m.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + '2m_temperature' + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                        month_data_t2m = 'data\era5land_' + '2m_temperature' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                        data_t2m.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_t2m, "ta"),)
+                
                 for year in missing_data_dates:
                     for month in missing_data_dates[year]['month']:
-                        data_d2m.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + '2m_dewpoint_temperature' + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                        month_data_d2m = 'data\era5land_' + '2m_dewpoint_temperature' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                        data_d2m.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_d2m, "ta"),)
                 
                 data_d2m.reset_index()
                 data_d2m.reindex_dataframe("valid_time")
@@ -331,10 +310,12 @@ class ClimateFiller():
                 data_v10 = DataFrame()
                 for year in missing_data_dates:
                     for month in missing_data_dates[year]['month']:
-                        data_u10.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + '10m_u_component_of_wind' + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                        month_data_u10 = 'data\era5land_' + '10m_u_component_of_wind' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                        data_u10.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_u10, "ta"),)
                 for year in missing_data_dates:
                     for month in missing_data_dates[year]['month']:
-                        data_v10.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + '10m_v_component_of_wind' + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                        month_data_v10 = 'data\era5land_' + '10m_v_component_of_wind' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                        data_v10.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_v10, "ta"),)
                 
                 data_u10.reset_index()
                 data_u10.reindex_dataframe("valid_time")
@@ -356,7 +337,8 @@ class ClimateFiller():
             elif column_to_fill_name == 'rs':
                 for year in missing_data_dates:
                     for month in missing_data_dates[year]['month']:
-                        data.append_dataframe(gis.get_era5_land_grib_as_dataframe("data\era5_r3_" + column_to_fill_name + '_' + str(year) + '_' + month + ".grib", "ta"),)
+                        data_month_path = 'data\era5land_' + 'surface_solar_radiation_downwards' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                        data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
                         
                 data.reset_index()
                 data.reindex_dataframe("valid_time")
@@ -376,21 +358,52 @@ class ClimateFiller():
                 data.add_column('rs', l)
                 data.keep_columns(['rs'])
                 data.rename_columns({'rs': 'ssrd'})
-                print(data.show())
                 
                 data.transform_column('ssrd', lambda o : o if abs(o) < 1500 else 0 )    
                 nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
                 for p in nan_indices:
                     self.data.set_row('rs', p, data.get_row(p)['ssrd'])
              
-                self.data.index_to_column()
-                print('Imputation of missing data for ' + column_to_fill_name + ' from MERRA2 was done.')
-                
-                print('Imputation of missing data for rs from ERA5-Land was done!')
-                
-          
+                print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
             
-            self.data.index_to_column()
+            elif column_to_fill_name == 'p':
+                for year in missing_data_dates:
+                    for month in missing_data_dates[year]['month']:
+                        data_month_path = 'data\era5land_' + 'total_precipitation' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                        data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
+                
+                
+                data.reset_index()
+                data.column_to_date('valid_time')
+                data.reindex_dataframe("valid_time")
+                data.sort()
+                data.missing_data('tp')
+                nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
+                data.drop_duplicated_indexes()
+                
+                l = []
+                for p in data.get_index():
+                    if p.hour == 1:
+                        new_value = data.get_row(p)['tp'] * 1000
+                    else:
+                        try:
+                            previous_hour = data.get_row(p-timedelta(hours=1))['tp']
+                        except KeyError:
+                            previous_hour = data.get_row(p)['tp']
+                            
+                        new_value = (data.get_row(p)['tp'] - previous_hour)*1000
+                    l.append(new_value)
+        
+                data.add_column('p', l)
+                data.keep_columns(['p'])
+                data.rename_columns({'p': 'tp'})
+                
+                nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
+                for p in nan_indices:
+                    self.data.set_row('p', p, data.get_row(p)['tp'])
+             
+                print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
+            
         elif product == 'merra2':
             merra2_variables = {
                 'ta': 'T2M',
@@ -463,8 +476,6 @@ class ClimateFiller():
         else:
             pass
         
-        
-    
     def best_ml_model(self, column_to_fill_name, lon, lat, product, metric='rmse'):
         list_models = [
             LinearRegression(),
@@ -545,7 +556,6 @@ class ClimateFiller():
         self.best_model = best_model
         print(f'The Best perfoming model is: {best_model_name} with {metric.upper()}={rmse_scores[best_model_name]}')
     
-
     def missing_data_checking(self, column_name=None, verbose=True):
         """Function Name: missing_data_checking
 
@@ -664,14 +674,14 @@ class ClimateFiller():
         plt.show()
     
     def et0_estimation(self, 
-                       air_temperture_column_name='ta',
-                       global_solar_radiation_column_name='rs',
-                       air_relative_humidity_column_name='rh',
-                       wind_speed_column_name='ws',
-                       latitude=31.65410805,
-                       longitude=-7.603140831,
+                       ta_column_name='ta',
+                       rs_column_name='rs',
+                       rh_column_name='rh',
+                       u_column_name='u',
                        method='pm',
-                       verbose=False
+                       verbose=False,
+                       freq='d',
+                       reference_crop='grass'
                        ):
         """
         Estimates reference evapotranspiration (ET0) using the specified meteorological data and method.
@@ -702,25 +712,66 @@ class ClimateFiller():
         """
         
         et0_data = DataFrame()
-        et0_data.add_column('ta_mean', self.data.resample_timeseries(in_place=False)[air_temperture_column_name])
-        et0_data.add_column('ta_max', self.data.resample_timeseries(in_place=False, agg='max')[air_temperture_column_name])
-        et0_data.add_column('ta_min', self.data.resample_timeseries(in_place=False, agg='min')[air_temperture_column_name], )
-        et0_data.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[air_relative_humidity_column_name])
-        et0_data.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[air_relative_humidity_column_name])
-        et0_data.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[air_relative_humidity_column_name])
-        et0_data.add_column('u2_mean', self.data.resample_timeseries(in_place=False)[wind_speed_column_name])
-        et0_data.add_column('rg_mean', self.data.resample_timeseries(in_place=False)[global_solar_radiation_column_name])
-        et0_data.index_to_column()
-        et0_data.add_doy_column(self.datetime_column_name)
-        et0_data.add_one_value_column('elevation', Lib.get_elevation_and_latitude(latitude, longitude))
-        et0_data.add_one_value_column('lat', latitude)
-        
-        if method == 'pm':
-            et0_data.add_column_based_on_function('et0_pm', Lib.et0_penman_monteith)
-        elif method == 'hargreaves':
-            et0_data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
+        if freq == 'd':
+            et0_data.add_column('ta_mean', self.data.resample_timeseries(in_place=False)[ta_column_name])
+            et0_data.add_column('ta_max', self.data.resample_timeseries(in_place=False, agg='max')[ta_column_name])
+            et0_data.add_column('ta_min', self.data.resample_timeseries(in_place=False, agg='min')[ta_column_name], )
+            et0_data.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[rh_column_name])
+            et0_data.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[rh_column_name])
+            et0_data.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
+            et0_data.add_column('u_mean', self.data.resample_timeseries(in_place=False)[u_column_name])
+            et0_data.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
+            et0_data.index_to_column()
+            et0_data.add_doy_column('doy', self.datetime_column_name)
             
-        self.data.set_dataframe(et0_data.get_dataframe())
+            if self.elevation is None:
+                et0_data.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
+            else:
+                et0_data.add_one_value_column('elevation', self.elevation)
+            
+            et0_data.add_one_value_column('lat', self.lat)
+        
+            if method == 'pm':
+                et0_data.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith(
+                    row, 
+                    ta_column_name,
+                    rs_column_name,
+                    rh_column_name,
+                    u_column_name
+                    ))
+            elif method == 'hargreaves':
+                et0_data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
+            elif method == 'pt':
+                et0_data.add_column_based_on_function('et0_pt', Lib.et0_priestley_taylor)
+            
+            self.data.set_dataframe(et0_data.get_dataframe())
+                
+        elif freq == 'h':
+            self.data.index_to_column()
+            self.data.add_doy_column(datetime_column_name=self.datetime_column_name)
+            self.data.add_hod_column(datetime_column_name=self.datetime_column_name)
+            
+            if self.elevation is None:
+                self.data.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
+            else:
+                self.data.add_one_value_column('elevation', self.elevation)
+                
+            self.data.add_one_value_column('lat', self.lat)
+            self.data.add_one_value_column('lon', self.lat)
+            
+            if method == 'pm':
+                self.data.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith_hourly(
+                    row, 
+                    ta_column_name,
+                    rs_column_name,
+                    rh_column_name,
+                    u_column_name,
+                    self.standard_meridian,
+                    reference_crop
+                    ))
+                self.data.transform_column('et0_pm', lambda o: o if o > 0 else 0)
+            elif method == 'pt':
+                self.data.add_column_based_on_function('et0_hargreaves', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
         
         if verbose is True:
             print(et0_data.get_dataframe())
@@ -1167,7 +1218,7 @@ class ClimateFiller():
         else:
             pass
     
-    def export(self, path_link='data/climate_ts.csv', data_type='csv'):
+    def export(self, path_link='data/climate_ts.csv', data_type='csv', **kwargs):
         """
         Exports the processed data to a specified file or location.
 
@@ -1186,10 +1237,8 @@ class ClimateFiller():
             - The processed data will be saved according to the specified file format and location.
             - The exported data can be used for further analysis, sharing, or storage.
         """
-        self.data.export(path_link, data_type)
+        self.data.export(path_link, data_type, kwargs)
         
-  
-  
     def download_era5_land_data_by_years(self, variables, lon, lat, start_date, end_date):
         point = ee.Geometry.Point(lon, lat)
         era5_land = ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY').filterBounds(point)
@@ -1239,7 +1288,6 @@ class ClimateFiller():
                                     cf.download(variable, start_datetime, start_datetime + next_year, longitude, latitude)"""
         
         #output_path = 'data/' + '_'.join([str(s) for s in variables] + [str(lon), str(lat), str(actual_year)]) + '.csv'
-        
     
     @staticmethod
     def extract_datetime(row):

@@ -537,7 +537,6 @@ class Lib:
         
         return ws
     
-<<<<<<< HEAD
     @staticmethod    
     def relative_humidity_magnus(ta_c, dew_point_c):
         """
@@ -561,7 +560,7 @@ class Lib:
         rh = 100 * (math.exp(alpha_dp) / math.exp(alpha_t))
         
         return rh
-=======
+    
     @staticmethod
     def slope_vapor_pressure_curve(t_c, method='standard'):
         """
@@ -754,4 +753,3 @@ class Lib:
         
         et0 = ((1.3) / (lambda_v * GHO)) * ((slope)/(slope + DELTA)) * rs_kj_per_m2
         return et0 * 1000
->>>>>>> d1504203b8a2b4007b8b84ba1326e20861c6b47e
