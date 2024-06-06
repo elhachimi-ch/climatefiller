@@ -151,3 +151,27 @@ class Lib:
         ws = wsz * (4.87 / math.log((67.8 * z) - 5.42))
         
         return ws
+    
+    @staticmethod    
+    def relative_humidity_magnus(ta_c, dew_point_c):
+        """
+        Estimate relative humidity given dew point and air temperature using the Magnus formula.
+        
+        :param ta_c: Air temperature in Celsius
+        :param dew_point_c: Dew point temperature in Celsius
+        :return: Relative humidity in percentage
+        """
+        # Constants for the formula
+        a = 17.62
+        b = 243.12
+        
+        # Calculate alpha for dew point
+        alpha_dp = (a * dew_point_c) / (b + dew_point_c)
+        
+        # Calculate alpha for temperature
+        alpha_t = (a * ta_c) / (b + ta_c)
+        
+        # Calculate relative humidity
+        rh = 100 * (math.exp(alpha_dp) / math.exp(alpha_t))
+        
+        return rh

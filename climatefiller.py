@@ -60,6 +60,8 @@ class ClimateFiller():
             self.data = DataFrame()
         else:
             self.data = DataFrame(data_path=data_link, data_type=data_type, **kwargs)
+            self.data.rename_columns({datetime_column_name:'datetime'})
+            datetime_column_name = 'datetime'
             self.data.column_to_date(datetime_column_name, datetime_format)
             self.data.reindex_dataframe(datetime_column_name)
             self.datetime_column_name = datetime_column_name
@@ -315,7 +317,8 @@ class ClimateFiller():
                 data.missing_data('t2m')
                 data.transform_column('t2m', lambda o: o - 273.15)
                 data.transform_column('d2m', lambda o: o - 273.15)
-                data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
+                data.add_column_based_on_function('era5_hr', lambda row: Lib.get_relative_humidity(row['t2m', 'd2m']))
+                #data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
                 data.missing_data('era5_hr')
                 nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
                 for p in nan_indices:
