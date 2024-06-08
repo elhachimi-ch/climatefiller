@@ -154,327 +154,651 @@ class ClimateFiller():
             - If the backend is not specified, the method will use the default backend associated with the class.
             - The effectiveness of the filling process may depend on the data availability and the chosen backend.
         """
-        if self.missing_data_checking(column_to_fill_name, verbose=False) == 0:
-            print('No missing data found in ' + column_to_fill_name)
-            return
-        
-        if product=='era5_land':
-            if column_to_fill_name == 'ta':
-                era5_land_variables = ['2m_temperature']
-            elif column_to_fill_name == 'rh':
-                era5_land_variables = ['2m_temperature', '2m_dewpoint_temperature']
-            elif column_to_fill_name == 'rs':
-                era5_land_variables = ['surface_solar_radiation_downwards']
-            elif column_to_fill_name == 'ws':
-                era5_land_variables = ['10m_u_component_of_wind', '10m_v_component_of_wind']
-            elif column_to_fill_name == 'p':
-                era5_land_variables = ['total_precipitation']
-                
-                
-            from data_science_toolkit.gis import GIS
-            import cdsapi
-            c = cdsapi.Client()
-
-            """if self.datetime_column_name is not None:
-                self.data.reindex_dataframe(self.datetime_column_name)"""
-
-            indexes = []
-            for p in self.data.get_missing_data_indexes_in_column(column_to_fill_name):
-                if isinstance(p, str) is True:
-                    indexes.append(datetime.datetime.strptime(p, '%Y-%m-%d %H:%M:%S'))
-                else:
-                    indexes.append(p)
-                
-            years = set()
-            for p in indexes:
-                years.add(p.year)     
-            missing_data_dates = {}    
-            years = list(years)
-            print("Found missing data for {} in year(s): {}".format(column_to_fill_name, years))  
-            for y in years:
-                missing_data_dict = {}
-                missing_data_dict['month'] = set()   
-                missing_data_dict['day'] = set() 
-                
+        if self.backend == 'gee':
+            if self.missing_data_checking(column_to_fill_name, verbose=False) == 0:
+                print('No missing data found in ' + column_to_fill_name)
+                return
+            
+            if product=='era5_land':
+                if column_to_fill_name == 'ta':
+                    era5_land_variables = ['2m_temperature']
+                elif column_to_fill_name == 'rh':
+                    era5_land_variables = ['2m_temperature', '2m_dewpoint_temperature']
+                elif column_to_fill_name == 'rs':
+                    era5_land_variables = ['surface_solar_radiation_downwards']
+                elif column_to_fill_name == 'ws':
+                    era5_land_variables = ['10m_u_component_of_wind', '10m_v_component_of_wind']
+                elif column_to_fill_name == 'p':
+                    era5_land_variables = ['total_precipitation']
+                    
+                indexes = []
+                for p in self.data.get_missing_data_indexes_in_column(column_to_fill_name):
+                    if isinstance(p, str) is True:
+                        indexes.append(datetime.datetime.strptime(p, '%Y-%m-%d %H:%M:%S'))
+                    else:
+                        indexes.append(p)
+                    
+                years = set()
                 for p in indexes:
-                    if p.year == y:
-                        missing_data_dict['month'].add(p.strftime('%m'))
-                        missing_data_dict['day'].add(p.strftime('%d'))
-                missing_data_dict['month'] = list(missing_data_dict['month'])
-                missing_data_dict['day'] = list(missing_data_dict['day'])
-                missing_data_dates[y] = missing_data_dict
-                for month in missing_data_dict['month']:
-                    for p in era5_land_variables:
-                        data_month_path = 'data\era5land_' + p + '_' + str(lon) + '_' + str(lat) + '_' + str(y) + '_' + month + '.grib'
-                        if os.path.exists(data_month_path) is False:
-                            c.retrieve(
-                            'reanalysis-era5-land',
-                            {
-                                'format': 'grib',
-                                'variable': p,
-                                'year': str(y),
-                                'month':  month,
-                                'day': missing_data_dict['day'],
-                                'time': [
-                                    '00:00', '01:00', '02:00',
-                                    '03:00', '04:00', '05:00',
-                                    '06:00', '07:00', '08:00',
-                                    '09:00', '10:00', '11:00',
-                                    '12:00', '13:00', '14:00',
-                                    '15:00', '16:00', '17:00',
-                                    '18:00', '19:00', '20:00',
-                                    '21:00', '22:00', '23:00',
-                                ],
-                                'area': [lat, lon, lat, lon],
-                            },
-                            data_month_path)
-                        else:
-                            print(f'Data of {y}-{month} found in {data_month_path}')
+                    years.add(p.year)     
+                missing_data_dates = {}    
+                years = list(years)
+                print("Found missing data for {} in year(s): {}".format(column_to_fill_name, years))  
+                
+                # download missing data 
+                for y in years:
+                    missing_data_dict = {}
+                    missing_data_dict['month'] = set()   
+                    missing_data_dict['day'] = set() 
+                    
+                    for p in indexes:
+                        if p.year == y:
+                            missing_data_dict['month'].add(p.strftime('%m'))
+                            missing_data_dict['day'].add(p.strftime('%d'))
+                    missing_data_dict['month'] = list(missing_data_dict['month'])
+                    missing_data_dict['day'] = list(missing_data_dict['day'])
+                    missing_data_dates[y] = missing_data_dict
+                    for month in missing_data_dict['month']:
+                        for p in era5_land_variables:
+                            data_month_path = 'data\era5land_' + p + '_' + str(lon) + '_' + str(lat) + '_' + str(y) + '_' + month + '.grib'
+                            if os.path.exists(data_month_path) is False:
+                                c.retrieve(
+                                'reanalysis-era5-land',
+                                {
+                                    'format': 'grib',
+                                    'variable': p,
+                                    'year': str(y),
+                                    'month':  month,
+                                    'day': missing_data_dict['day'],
+                                    'time': [
+                                        '00:00', '01:00', '02:00',
+                                        '03:00', '04:00', '05:00',
+                                        '06:00', '07:00', '08:00',
+                                        '09:00', '10:00', '11:00',
+                                        '12:00', '13:00', '14:00',
+                                        '15:00', '16:00', '17:00',
+                                        '18:00', '19:00', '20:00',
+                                        '21:00', '22:00', '23:00',
+                                    ],
+                                    'area': [lat, lon, lat, lon],
+                                },
+                                data_month_path)
+                            else:
+                                print(f'Data of {y}-{month} found in {data_month_path}')
+                            
+                
+                gis = GIS()
+                data = DataFrame()
+                
+                if column_to_fill_name == 'ta':
+                    for year in missing_data_dates:
+                        for month in missing_data_dates[year]['month']:
+                            data_month_path = 'data\era5land_' + column_to_fill_name + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                            data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
+                    
+                    data.reset_index()
+                    data.column_to_date('valid_time')
+                    data.reindex_dataframe("valid_time")
+                    data.sort()
+                    data.missing_data('t2m')
+                    data.transform_column('t2m', lambda o: o - 273.15)
+                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
+                    data.drop_duplicated_indexes()
+                    
+                    if machine_learning_enabled:
+                        self.best_ml_model(column_to_fill_name, lon, lat, product)
                         
-            
-            gis = GIS()
-            data = DataFrame()
-            
-            if column_to_fill_name == 'ta':
-                for year in missing_data_dates:
-                    for month in missing_data_dates[year]['month']:
-                        data_month_path = 'data\era5land_' + column_to_fill_name + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
-                        data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
+                        for p in nan_indices:
+                            print(self.data_reanalysis.get_row(p))
+                            prediction = self.best_model.predict(self.data_reanalysis.get_row(p).values[0].reshape(1, -1))
+                            self.data.set_row('ta', p, prediction)
+                                
+                        """for p in nan_indices:
+                            if not df.loc[df['datetime'] == p, column_to_fill_name].empty:
+                                prediction = self.best_model.predict(df.loc[df['datetime'] == p, column_to_fill_name].values[0].reshape(1, -1))
+                                self.data.set_row(column_to_fill_name, p, prediction)"""
+                    else:
+                        for p in nan_indices:
+                            try:
+                                self.data.set_row('ta', p, data.get_row(p)['t2m'])
+                            except KeyError as e:
+                                print(f'Data about {p} not found in ERA5-Land')
+                            
+                    print('Imputation of missing data for ta from ERA5-Land was done!')
+                    
+                elif column_to_fill_name == 'rh':
+                    data_t2m = DataFrame()
+                    data_d2m = DataFrame()
+                    
+                    for year in missing_data_dates:
+                        for month in missing_data_dates[year]['month']:
+                            month_data_t2m = 'data\era5land_' + '2m_temperature' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                            data_t2m.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_t2m, "ta"),)
+                    
+                    for year in missing_data_dates:
+                        for month in missing_data_dates[year]['month']:
+                            month_data_d2m = 'data\era5land_' + '2m_dewpoint_temperature' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                            data_d2m.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_d2m, "ta"),)
+                    
+                    data_d2m.reset_index()
+                    data_d2m.reindex_dataframe("valid_time")
+                    data_d2m.keep_columns(['d2m'])
+                    data_t2m.reset_index()
+                    data_t2m.reindex_dataframe("valid_time")
+                    data_t2m.keep_columns(['t2m'])
+                    data_t2m.join(data_d2m.get_dataframe())
+                    data = data_t2m
+                    data.missing_data('t2m')
+                    data.transform_column('t2m', lambda o: o - 273.15)
+                    data.transform_column('d2m', lambda o: o - 273.15)
+                    data.add_column_based_on_function('era5_hr', lambda row: Lib.get_relative_humidity(row['t2m', 'd2m']))
+                    #data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
+                    data.missing_data('era5_hr')
+                    nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
+                    for p in nan_indices:
+                        self.data.set_row('rh', p, data.get_row(p)['era5_hr'])
+                    
+                    print('Imputation of missing data for rh from ERA5-Land was done!')
+                    
+                elif column_to_fill_name == 'ws':
+                    data_u10 = DataFrame()
+                    data_v10 = DataFrame()
+                    for year in missing_data_dates:
+                        for month in missing_data_dates[year]['month']:
+                            month_data_u10 = 'data\era5land_' + '10m_u_component_of_wind' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                            data_u10.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_u10, "ta"),)
+                    for year in missing_data_dates:
+                        for month in missing_data_dates[year]['month']:
+                            month_data_v10 = 'data\era5land_' + '10m_v_component_of_wind' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                            data_v10.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_v10, "ta"),)
+                    
+                    data_u10.reset_index()
+                    data_u10.reindex_dataframe("valid_time")
+                    data_u10.keep_columns(['u10'])
+                    data_v10.reset_index()
+                    data_v10.reindex_dataframe("valid_time")
+                    data_v10.keep_columns(['v10'])
+                    data_v10.join(data_u10.get_dataframe())
+                    data = data_v10
+                    data.add_column_based_on_function('era5_ws', Lib.get_2m_wind_speed)
+                    nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
+                    data.missing_data('u10')
+                    data.missing_data('era5_ws')
+                    for p in nan_indices:
+                        self.data.set_row('ws', p, data.get_row(p)['era5_ws'])
+                    
+                    print('Imputation of missing data for wind speed from ERA5-Land was done!')
+                    
+                elif column_to_fill_name == 'rs':
+                    for year in missing_data_dates:
+                        for month in missing_data_dates[year]['month']:
+                            data_month_path = 'data\era5land_' + 'surface_solar_radiation_downwards' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                            data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
+                            
+                    data.reset_index()
+                    data.reindex_dataframe("valid_time")
+                    data.missing_data('ssrd')
+                    l = []
+                    for p in data.get_index():
+                        if p.hour == 1:
+                            new_value = data.get_row(p)['ssrd']/3600
+                        else:
+                            try:
+                                previous_hour = data.get_row(p-timedelta(hours=1))['ssrd']
+                            except KeyError: # if age is not convertable to int
+                                previous_hour = data.get_row(p)['ssrd']
+                                
+                            new_value = (data.get_row(p)['ssrd'] - previous_hour)/3600
+                        l.append(new_value)
+                    data.add_column('rs', l)
+                    data.keep_columns(['rs'])
+                    data.rename_columns({'rs': 'ssrd'})
+                    
+                    data.transform_column('ssrd', lambda o : o if abs(o) < 1500 else 0 )    
+                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
+                    for p in nan_indices:
+                        self.data.set_row('rs', p, data.get_row(p)['ssrd'])
                 
-                data.reset_index()
-                data.column_to_date('valid_time')
-                data.reindex_dataframe("valid_time")
-                data.sort()
-                data.missing_data('t2m')
-                data.transform_column('t2m', lambda o: o - 273.15)
-                nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
-                data.drop_duplicated_indexes()
+                    print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
                 
+                elif column_to_fill_name == 'p':
+                    for year in missing_data_dates:
+                        for month in missing_data_dates[year]['month']:
+                            data_month_path = 'data\era5land_' + 'total_precipitation' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                            data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
+                    
+                    
+                    data.reset_index()
+                    data.column_to_date('valid_time')
+                    data.reindex_dataframe("valid_time")
+                    data.sort()
+                    data.missing_data('tp')
+                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
+                    data.drop_duplicated_indexes()
+                    
+                    l = []
+                    for p in data.get_index():
+                        if p.hour == 1:
+                            new_value = data.get_row(p)['tp'] * 1000
+                        else:
+                            try:
+                                previous_hour = data.get_row(p-timedelta(hours=1))['tp']
+                            except KeyError:
+                                previous_hour = data.get_row(p)['tp']
+                                
+                            new_value = (data.get_row(p)['tp'] - previous_hour)*1000
+                        l.append(new_value)
+            
+                    data.add_column('p', l)
+                    data.keep_columns(['p'])
+                    data.rename_columns({'p': 'tp'})
+                    
+                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
+                    for p in nan_indices:
+                        self.data.set_row('p', p, data.get_row(p)['tp'])
+                
+                    print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
+                
+            elif product == 'merra2':
+                merra2_variables = {
+                    'ta': 'T2M',
+                    'rh': 'RH2M',
+                    'ws': 'WS2M',
+                    'rs': 'ALLSKY_SFC_SW_DWN',
+                    'pr': 'PRECTOTCORR',
+                    'wd': 'WD2M'
+                }
+
+                if column_to_fill_name not in merra2_variables:
+                    print(f'Invalid column_to_fill_name: {column_to_fill_name}')
+                    return
+
+                start = self.data.get_dataframe().index[0]
+                end = self.data.get_dataframe().index[-1]
+                start = datetime.datetime.strftime(start, '%Y%m%d')
+                end = datetime.datetime.strftime(end, '%Y%m%d')
+
+                api_url = 'https://power.larc.nasa.gov/api/temporal/hourly/point'
+                format = 'json'
+                community = 'ag'
+                timezone = 'utc'
+
+                params = {
+                    'start': start,
+                    'end': end,
+                    'latitude': lat,
+                    'longitude': lon,
+                    'community': community,
+                    'parameters': merra2_variables[column_to_fill_name],
+                    'format': format,
+                    'user': 'ysouidi1',
+                    'header': 'true',
+                    'time-standard': timezone
+                }
+
+                response = requests.get(api_url, params=params)
+
+                if response.status_code != 200:
+                    print('Failed to retrieve data:', response.status_code)
+                    return None
+
+                data_merra = response.json()
+                result = data_merra['properties']['parameter'][merra2_variables[column_to_fill_name]]
+                df = pd.DataFrame(result.items(), columns=['datetime', column_to_fill_name])
+                df['datetime'] = pd.to_datetime(df['datetime'], format='%Y%m%d%H')
+
+                nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
+
+                if len(nan_indices) == 0:
+                    return
+
                 if machine_learning_enabled:
                     self.best_ml_model(column_to_fill_name, lon, lat, product)
-                    
                     for p in nan_indices:
-                        print(self.data_reanalysis.get_row(p))
-                        prediction = self.best_model.predict(self.data_reanalysis.get_row(p).values[0].reshape(1, -1))
-                        self.data.set_row('ta', p, prediction)
-                            
-                    """for p in nan_indices:
                         if not df.loc[df['datetime'] == p, column_to_fill_name].empty:
                             prediction = self.best_model.predict(df.loc[df['datetime'] == p, column_to_fill_name].values[0].reshape(1, -1))
-                            self.data.set_row(column_to_fill_name, p, prediction)"""
+                            self.data.set_row(column_to_fill_name, p, prediction)
                 else:
                     for p in nan_indices:
-                        try:
-                            self.data.set_row('ta', p, data.get_row(p)['t2m'])
-                        except KeyError as e:
-                            print(f'Data about {p} not found in ERA5-Land')
-                        
-                print('Imputation of missing data for ta from ERA5-Land was done!')
-                
-            elif column_to_fill_name == 'rh':
-                data_t2m = DataFrame()
-                data_d2m = DataFrame()
-                
-                for year in missing_data_dates:
-                    for month in missing_data_dates[year]['month']:
-                        month_data_t2m = 'data\era5land_' + '2m_temperature' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
-                        data_t2m.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_t2m, "ta"),)
-                
-                for year in missing_data_dates:
-                    for month in missing_data_dates[year]['month']:
-                        month_data_d2m = 'data\era5land_' + '2m_dewpoint_temperature' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
-                        data_d2m.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_d2m, "ta"),)
-                
-                data_d2m.reset_index()
-                data_d2m.reindex_dataframe("valid_time")
-                data_d2m.keep_columns(['d2m'])
-                data_t2m.reset_index()
-                data_t2m.reindex_dataframe("valid_time")
-                data_t2m.keep_columns(['t2m'])
-                data_t2m.join(data_d2m.get_dataframe())
-                data = data_t2m
-                data.missing_data('t2m')
-                data.transform_column('t2m', lambda o: o - 273.15)
-                data.transform_column('d2m', lambda o: o - 273.15)
-                data.add_column_based_on_function('era5_hr', lambda row: Lib.get_relative_humidity(row['t2m', 'd2m']))
-                #data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
-                data.missing_data('era5_hr')
-                nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
-                for p in nan_indices:
-                    self.data.set_row('rh', p, data.get_row(p)['era5_hr'])
-                
-                print('Imputation of missing data for rh from ERA5-Land was done!')
-                
-            elif column_to_fill_name == 'ws':
-                data_u10 = DataFrame()
-                data_v10 = DataFrame()
-                for year in missing_data_dates:
-                    for month in missing_data_dates[year]['month']:
-                        month_data_u10 = 'data\era5land_' + '10m_u_component_of_wind' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
-                        data_u10.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_u10, "ta"),)
-                for year in missing_data_dates:
-                    for month in missing_data_dates[year]['month']:
-                        month_data_v10 = 'data\era5land_' + '10m_v_component_of_wind' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
-                        data_v10.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_v10, "ta"),)
-                
-                data_u10.reset_index()
-                data_u10.reindex_dataframe("valid_time")
-                data_u10.keep_columns(['u10'])
-                data_v10.reset_index()
-                data_v10.reindex_dataframe("valid_time")
-                data_v10.keep_columns(['v10'])
-                data_v10.join(data_u10.get_dataframe())
-                data = data_v10
-                data.add_column_based_on_function('era5_ws', Lib.get_2m_wind_speed)
-                nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
-                data.missing_data('u10')
-                data.missing_data('era5_ws')
-                for p in nan_indices:
-                    self.data.set_row('ws', p, data.get_row(p)['era5_ws'])
-                
-                print('Imputation of missing data for wind speed from ERA5-Land was done!')
-                
-            elif column_to_fill_name == 'rs':
-                for year in missing_data_dates:
-                    for month in missing_data_dates[year]['month']:
-                        data_month_path = 'data\era5land_' + 'surface_solar_radiation_downwards' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
-                        data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
-                        
-                data.reset_index()
-                data.reindex_dataframe("valid_time")
-                data.missing_data('ssrd')
-                l = []
-                for p in data.get_index():
-                    if p.hour == 1:
-                        new_value = data.get_row(p)['ssrd']/3600
-                    else:
-                        try:
-                            previous_hour = data.get_row(p-timedelta(hours=1))['ssrd']
-                        except KeyError: # if age is not convertable to int
-                            previous_hour = data.get_row(p)['ssrd']
-                            
-                        new_value = (data.get_row(p)['ssrd'] - previous_hour)/3600
-                    l.append(new_value)
-                data.add_column('rs', l)
-                data.keep_columns(['rs'])
-                data.rename_columns({'rs': 'ssrd'})
-                
-                data.transform_column('ssrd', lambda o : o if abs(o) < 1500 else 0 )    
-                nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
-                for p in nan_indices:
-                    self.data.set_row('rs', p, data.get_row(p)['ssrd'])
-             
-                print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
+                        corresponding_row = df[df['datetime'] == p][column_to_fill_name]
+                        if not corresponding_row.empty:
+                            self.data.set_row(column_to_fill_name, p, df.loc[df['datetime'] == p, column_to_fill_name].values[0])
+
+                self.data.index_to_column()
+                print('Imputation of missing data for ' + column_to_fill_name + ' from MERRA2 was done.')
             
-            elif column_to_fill_name == 'p':
-                for year in missing_data_dates:
-                    for month in missing_data_dates[year]['month']:
-                        data_month_path = 'data\era5land_' + 'total_precipitation' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
-                        data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
-                
-                
-                data.reset_index()
-                data.column_to_date('valid_time')
-                data.reindex_dataframe("valid_time")
-                data.sort()
-                data.missing_data('tp')
-                nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
-                data.drop_duplicated_indexes()
-                
-                l = []
-                for p in data.get_index():
-                    if p.hour == 1:
-                        new_value = data.get_row(p)['tp'] * 1000
-                    else:
-                        try:
-                            previous_hour = data.get_row(p-timedelta(hours=1))['tp']
-                        except KeyError:
-                            previous_hour = data.get_row(p)['tp']
-                            
-                        new_value = (data.get_row(p)['tp'] - previous_hour)*1000
-                    l.append(new_value)
-        
-                data.add_column('p', l)
-                data.keep_columns(['p'])
-                data.rename_columns({'p': 'tp'})
-                
-                nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
-                for p in nan_indices:
-                    self.data.set_row('p', p, data.get_row(p)['tp'])
-             
-                print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
-            
-        elif product == 'merra2':
-            merra2_variables = {
-                'ta': 'T2M',
-                'rh': 'RH2M',
-                'ws': 'WS2M',
-                'rs': 'ALLSKY_SFC_SW_DWN',
-                'pr': 'PRECTOTCORR',
-                'wd': 'WD2M'
-            }
-
-            if column_to_fill_name not in merra2_variables:
-                print(f'Invalid column_to_fill_name: {column_to_fill_name}')
-                return
-
-            start = self.data.get_dataframe().index[0]
-            end = self.data.get_dataframe().index[-1]
-            start = datetime.datetime.strftime(start, '%Y%m%d')
-            end = datetime.datetime.strftime(end, '%Y%m%d')
-
-            api_url = 'https://power.larc.nasa.gov/api/temporal/hourly/point'
-            format = 'json'
-            community = 'ag'
-            timezone = 'utc'
-
-            params = {
-                'start': start,
-                'end': end,
-                'latitude': lat,
-                'longitude': lon,
-                'community': community,
-                'parameters': merra2_variables[column_to_fill_name],
-                'format': format,
-                'user': 'ysouidi1',
-                'header': 'true',
-                'time-standard': timezone
-            }
-
-            response = requests.get(api_url, params=params)
-
-            if response.status_code != 200:
-                print('Failed to retrieve data:', response.status_code)
-                return None
-
-            data_merra = response.json()
-            result = data_merra['properties']['parameter'][merra2_variables[column_to_fill_name]]
-            df = pd.DataFrame(result.items(), columns=['datetime', column_to_fill_name])
-            df['datetime'] = pd.to_datetime(df['datetime'], format='%Y%m%d%H')
-
-            nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
-
-            if len(nan_indices) == 0:
-                return
-
-            if machine_learning_enabled:
-                self.best_ml_model(column_to_fill_name, lon, lat, product)
-                for p in nan_indices:
-                    if not df.loc[df['datetime'] == p, column_to_fill_name].empty:
-                        prediction = self.best_model.predict(df.loc[df['datetime'] == p, column_to_fill_name].values[0].reshape(1, -1))
-                        self.data.set_row(column_to_fill_name, p, prediction)
+            # other data source
             else:
-                for p in nan_indices:
-                    corresponding_row = df[df['datetime'] == p][column_to_fill_name]
-                    if not corresponding_row.empty:
-                        self.data.set_row(column_to_fill_name, p, df.loc[df['datetime'] == p, column_to_fill_name].values[0])
-
-            self.data.index_to_column()
-            print('Imputation of missing data for ' + column_to_fill_name + ' from MERRA2 was done.')
+                pass
+            
         
-        # other data source
-        else:
             pass
+        else:
+            if self.missing_data_checking(column_to_fill_name, verbose=False) == 0:
+                print('No missing data found in ' + column_to_fill_name)
+                return
+            
+            if product=='era5_land':
+                if column_to_fill_name == 'ta':
+                    era5_land_variables = ['2m_temperature']
+                elif column_to_fill_name == 'rh':
+                    era5_land_variables = ['2m_temperature', '2m_dewpoint_temperature']
+                elif column_to_fill_name == 'rs':
+                    era5_land_variables = ['surface_solar_radiation_downwards']
+                elif column_to_fill_name == 'ws':
+                    era5_land_variables = ['10m_u_component_of_wind', '10m_v_component_of_wind']
+                elif column_to_fill_name == 'p':
+                    era5_land_variables = ['total_precipitation']
+                    
+                    
+                from data_science_toolkit.gis import GIS
+                import cdsapi
+                c = cdsapi.Client()
+
+                """if self.datetime_column_name is not None:
+                    self.data.reindex_dataframe(self.datetime_column_name)"""
+
+                indexes = []
+                for p in self.data.get_missing_data_indexes_in_column(column_to_fill_name):
+                    if isinstance(p, str) is True:
+                        indexes.append(datetime.datetime.strptime(p, '%Y-%m-%d %H:%M:%S'))
+                    else:
+                        indexes.append(p)
+                    
+                years = set()
+                for p in indexes:
+                    years.add(p.year)     
+                missing_data_dates = {}    
+                years = list(years)
+                print("Found missing data for {} in year(s): {}".format(column_to_fill_name, years))  
+                for y in years:
+                    missing_data_dict = {}
+                    missing_data_dict['month'] = set()   
+                    missing_data_dict['day'] = set() 
+                    
+                    for p in indexes:
+                        if p.year == y:
+                            missing_data_dict['month'].add(p.strftime('%m'))
+                            missing_data_dict['day'].add(p.strftime('%d'))
+                    missing_data_dict['month'] = list(missing_data_dict['month'])
+                    missing_data_dict['day'] = list(missing_data_dict['day'])
+                    missing_data_dates[y] = missing_data_dict
+                    for month in missing_data_dict['month']:
+                        for p in era5_land_variables:
+                            data_month_path = 'data\era5land_' + p + '_' + str(lon) + '_' + str(lat) + '_' + str(y) + '_' + month + '.grib'
+                            if os.path.exists(data_month_path) is False:
+                                c.retrieve(
+                                'reanalysis-era5-land',
+                                {
+                                    'format': 'grib',
+                                    'variable': p,
+                                    'year': str(y),
+                                    'month':  month,
+                                    'day': missing_data_dict['day'],
+                                    'time': [
+                                        '00:00', '01:00', '02:00',
+                                        '03:00', '04:00', '05:00',
+                                        '06:00', '07:00', '08:00',
+                                        '09:00', '10:00', '11:00',
+                                        '12:00', '13:00', '14:00',
+                                        '15:00', '16:00', '17:00',
+                                        '18:00', '19:00', '20:00',
+                                        '21:00', '22:00', '23:00',
+                                    ],
+                                    'area': [lat, lon, lat, lon],
+                                },
+                                data_month_path)
+                            else:
+                                print(f'Data of {y}-{month} found in {data_month_path}')
+                            
+                
+                gis = GIS()
+                data = DataFrame()
+                
+                if column_to_fill_name == 'ta':
+                    for year in missing_data_dates:
+                        for month in missing_data_dates[year]['month']:
+                            data_month_path = 'data\era5land_' + column_to_fill_name + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                            data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
+                    
+                    data.reset_index()
+                    data.column_to_date('valid_time')
+                    data.reindex_dataframe("valid_time")
+                    data.sort()
+                    data.missing_data('t2m')
+                    data.transform_column('t2m', lambda o: o - 273.15)
+                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
+                    data.drop_duplicated_indexes()
+                    
+                    if machine_learning_enabled:
+                        self.best_ml_model(column_to_fill_name, lon, lat, product)
+                        
+                        for p in nan_indices:
+                            print(self.data_reanalysis.get_row(p))
+                            prediction = self.best_model.predict(self.data_reanalysis.get_row(p).values[0].reshape(1, -1))
+                            self.data.set_row('ta', p, prediction)
+                                
+                        """for p in nan_indices:
+                            if not df.loc[df['datetime'] == p, column_to_fill_name].empty:
+                                prediction = self.best_model.predict(df.loc[df['datetime'] == p, column_to_fill_name].values[0].reshape(1, -1))
+                                self.data.set_row(column_to_fill_name, p, prediction)"""
+                    else:
+                        for p in nan_indices:
+                            try:
+                                self.data.set_row('ta', p, data.get_row(p)['t2m'])
+                            except KeyError as e:
+                                print(f'Data about {p} not found in ERA5-Land')
+                            
+                    print('Imputation of missing data for ta from ERA5-Land was done!')
+                    
+                elif column_to_fill_name == 'rh':
+                    data_t2m = DataFrame()
+                    data_d2m = DataFrame()
+                    
+                    for year in missing_data_dates:
+                        for month in missing_data_dates[year]['month']:
+                            month_data_t2m = 'data\era5land_' + '2m_temperature' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                            data_t2m.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_t2m, "ta"),)
+                    
+                    for year in missing_data_dates:
+                        for month in missing_data_dates[year]['month']:
+                            month_data_d2m = 'data\era5land_' + '2m_dewpoint_temperature' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                            data_d2m.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_d2m, "ta"),)
+                    
+                    data_d2m.reset_index()
+                    data_d2m.reindex_dataframe("valid_time")
+                    data_d2m.keep_columns(['d2m'])
+                    data_t2m.reset_index()
+                    data_t2m.reindex_dataframe("valid_time")
+                    data_t2m.keep_columns(['t2m'])
+                    data_t2m.join(data_d2m.get_dataframe())
+                    data = data_t2m
+                    data.missing_data('t2m')
+                    data.transform_column('t2m', lambda o: o - 273.15)
+                    data.transform_column('d2m', lambda o: o - 273.15)
+                    data.add_column_based_on_function('era5_hr', lambda row: Lib.get_relative_humidity(row['t2m', 'd2m']))
+                    #data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
+                    data.missing_data('era5_hr')
+                    nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
+                    for p in nan_indices:
+                        self.data.set_row('rh', p, data.get_row(p)['era5_hr'])
+                    
+                    print('Imputation of missing data for rh from ERA5-Land was done!')
+                    
+                elif column_to_fill_name == 'ws':
+                    data_u10 = DataFrame()
+                    data_v10 = DataFrame()
+                    for year in missing_data_dates:
+                        for month in missing_data_dates[year]['month']:
+                            month_data_u10 = 'data\era5land_' + '10m_u_component_of_wind' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                            data_u10.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_u10, "ta"),)
+                    for year in missing_data_dates:
+                        for month in missing_data_dates[year]['month']:
+                            month_data_v10 = 'data\era5land_' + '10m_v_component_of_wind' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                            data_v10.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_v10, "ta"),)
+                    
+                    data_u10.reset_index()
+                    data_u10.reindex_dataframe("valid_time")
+                    data_u10.keep_columns(['u10'])
+                    data_v10.reset_index()
+                    data_v10.reindex_dataframe("valid_time")
+                    data_v10.keep_columns(['v10'])
+                    data_v10.join(data_u10.get_dataframe())
+                    data = data_v10
+                    data.add_column_based_on_function('era5_ws', Lib.get_2m_wind_speed)
+                    nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
+                    data.missing_data('u10')
+                    data.missing_data('era5_ws')
+                    for p in nan_indices:
+                        self.data.set_row('ws', p, data.get_row(p)['era5_ws'])
+                    
+                    print('Imputation of missing data for wind speed from ERA5-Land was done!')
+                    
+                elif column_to_fill_name == 'rs':
+                    for year in missing_data_dates:
+                        for month in missing_data_dates[year]['month']:
+                            data_month_path = 'data\era5land_' + 'surface_solar_radiation_downwards' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                            data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
+                            
+                    data.reset_index()
+                    data.reindex_dataframe("valid_time")
+                    data.missing_data('ssrd')
+                    l = []
+                    for p in data.get_index():
+                        if p.hour == 1:
+                            new_value = data.get_row(p)['ssrd']/3600
+                        else:
+                            try:
+                                previous_hour = data.get_row(p-timedelta(hours=1))['ssrd']
+                            except KeyError: # if age is not convertable to int
+                                previous_hour = data.get_row(p)['ssrd']
+                                
+                            new_value = (data.get_row(p)['ssrd'] - previous_hour)/3600
+                        l.append(new_value)
+                    data.add_column('rs', l)
+                    data.keep_columns(['rs'])
+                    data.rename_columns({'rs': 'ssrd'})
+                    
+                    data.transform_column('ssrd', lambda o : o if abs(o) < 1500 else 0 )    
+                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
+                    for p in nan_indices:
+                        self.data.set_row('rs', p, data.get_row(p)['ssrd'])
+                
+                    print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
+                
+                elif column_to_fill_name == 'p':
+                    for year in missing_data_dates:
+                        for month in missing_data_dates[year]['month']:
+                            data_month_path = 'data\era5land_' + 'total_precipitation' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                            data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
+                    
+                    
+                    data.reset_index()
+                    data.column_to_date('valid_time')
+                    data.reindex_dataframe("valid_time")
+                    data.sort()
+                    data.missing_data('tp')
+                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
+                    data.drop_duplicated_indexes()
+                    
+                    l = []
+                    for p in data.get_index():
+                        if p.hour == 1:
+                            new_value = data.get_row(p)['tp'] * 1000
+                        else:
+                            try:
+                                previous_hour = data.get_row(p-timedelta(hours=1))['tp']
+                            except KeyError:
+                                previous_hour = data.get_row(p)['tp']
+                                
+                            new_value = (data.get_row(p)['tp'] - previous_hour)*1000
+                        l.append(new_value)
+            
+                    data.add_column('p', l)
+                    data.keep_columns(['p'])
+                    data.rename_columns({'p': 'tp'})
+                    
+                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
+                    for p in nan_indices:
+                        self.data.set_row('p', p, data.get_row(p)['tp'])
+                
+                    print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
+                
+            elif product == 'merra2':
+                merra2_variables = {
+                    'ta': 'T2M',
+                    'rh': 'RH2M',
+                    'ws': 'WS2M',
+                    'rs': 'ALLSKY_SFC_SW_DWN',
+                    'pr': 'PRECTOTCORR',
+                    'wd': 'WD2M'
+                }
+
+                if column_to_fill_name not in merra2_variables:
+                    print(f'Invalid column_to_fill_name: {column_to_fill_name}')
+                    return
+
+                start = self.data.get_dataframe().index[0]
+                end = self.data.get_dataframe().index[-1]
+                start = datetime.datetime.strftime(start, '%Y%m%d')
+                end = datetime.datetime.strftime(end, '%Y%m%d')
+
+                api_url = 'https://power.larc.nasa.gov/api/temporal/hourly/point'
+                format = 'json'
+                community = 'ag'
+                timezone = 'utc'
+
+                params = {
+                    'start': start,
+                    'end': end,
+                    'latitude': lat,
+                    'longitude': lon,
+                    'community': community,
+                    'parameters': merra2_variables[column_to_fill_name],
+                    'format': format,
+                    'user': 'ysouidi1',
+                    'header': 'true',
+                    'time-standard': timezone
+                }
+
+                response = requests.get(api_url, params=params)
+
+                if response.status_code != 200:
+                    print('Failed to retrieve data:', response.status_code)
+                    return None
+
+                data_merra = response.json()
+                result = data_merra['properties']['parameter'][merra2_variables[column_to_fill_name]]
+                df = pd.DataFrame(result.items(), columns=['datetime', column_to_fill_name])
+                df['datetime'] = pd.to_datetime(df['datetime'], format='%Y%m%d%H')
+
+                nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
+
+                if len(nan_indices) == 0:
+                    return
+
+                if machine_learning_enabled:
+                    self.best_ml_model(column_to_fill_name, lon, lat, product)
+                    for p in nan_indices:
+                        if not df.loc[df['datetime'] == p, column_to_fill_name].empty:
+                            prediction = self.best_model.predict(df.loc[df['datetime'] == p, column_to_fill_name].values[0].reshape(1, -1))
+                            self.data.set_row(column_to_fill_name, p, prediction)
+                else:
+                    for p in nan_indices:
+                        corresponding_row = df[df['datetime'] == p][column_to_fill_name]
+                        if not corresponding_row.empty:
+                            self.data.set_row(column_to_fill_name, p, df.loc[df['datetime'] == p, column_to_fill_name].values[0])
+
+                self.data.index_to_column()
+                print('Imputation of missing data for ' + column_to_fill_name + ' from MERRA2 was done.')
+            
+            # other data source
+            else:
+                pass
+            
+        
+        
+        
         
     def best_ml_model(self, column_to_fill_name, lon, lat, product, metric='rmse'):
         list_models = [
