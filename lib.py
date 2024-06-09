@@ -526,16 +526,15 @@ class Lib:
         return elevation
     
     @staticmethod
-    def get_2m_wind_speed(row):
-        uz, vz, z = row['u10'], row['v10'], 10
+    def logarithmic_wind_profile(u, v, z_source=10, z_target=2):
         
-        # calculate 10m wind speed magnitude
-        wsz = math.sqrt(math.pow(uz, 2) + math.pow(vz, 2))
+        # Calculate wind speed at 10 meters
+        wind_speed_source = math.sqrt(u**2 + v**2)
         
-        # calculate 2m wind speed using logarithmic wind profile model
-        ws = wsz * (4.87 / math.log((67.8 * z) - 5.42))
+        # Calculate wind speed at 2 meters using the logarithmic wind profile
+        wind_speed_target = wind_speed_source * (math.log(z_target / z_source) / math.log(z_target / z_source))
         
-        return ws
+        return wind_speed_target
     
     @staticmethod    
     def relative_humidity_magnus(ta_c, dew_point_c):

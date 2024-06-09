@@ -161,13 +161,13 @@ class ClimateFiller():
             
             if product=='era5_land':
                 if column_to_fill_name == 'ta':
-                    era5_land_variables = ['2m_temperature']
+                    era5_land_variables = ['temperature_2m']
                 elif column_to_fill_name == 'rh':
-                    era5_land_variables = ['2m_temperature', '2m_dewpoint_temperature']
+                    era5_land_variables = ['temperature_2m', 'dewpoint_temperature_2m']
                 elif column_to_fill_name == 'rs':
                     era5_land_variables = ['surface_solar_radiation_downwards']
                 elif column_to_fill_name == 'ws':
-                    era5_land_variables = ['10m_u_component_of_wind', '10m_v_component_of_wind']
+                    era5_land_variables = ['u_component_of_wind_10m', 'v_component_of_wind_10m']
                 elif column_to_fill_name == 'p':
                     era5_land_variables = ['total_precipitation']
                     
@@ -183,62 +183,24 @@ class ClimateFiller():
                     years.add(p.year)     
                 missing_data_dates = {}    
                 years = list(years)
+                years.sort()
                 print("Found missing data for {} in year(s): {}".format(column_to_fill_name, years))  
-                
-                # download missing data 
-                for y in years:
-                    missing_data_dict = {}
-                    missing_data_dict['month'] = set()   
-                    missing_data_dict['day'] = set() 
-                    
-                    for p in indexes:
-                        if p.year == y:
-                            missing_data_dict['month'].add(p.strftime('%m'))
-                            missing_data_dict['day'].add(p.strftime('%d'))
-                    missing_data_dict['month'] = list(missing_data_dict['month'])
-                    missing_data_dict['day'] = list(missing_data_dict['day'])
-                    missing_data_dates[y] = missing_data_dict
-                    for month in missing_data_dict['month']:
-                        for p in era5_land_variables:
-                            data_month_path = 'data\era5land_' + p + '_' + str(lon) + '_' + str(lat) + '_' + str(y) + '_' + month + '.grib'
-                            if os.path.exists(data_month_path) is False:
-                                c.retrieve(
-                                'reanalysis-era5-land',
-                                {
-                                    'format': 'grib',
-                                    'variable': p,
-                                    'year': str(y),
-                                    'month':  month,
-                                    'day': missing_data_dict['day'],
-                                    'time': [
-                                        '00:00', '01:00', '02:00',
-                                        '03:00', '04:00', '05:00',
-                                        '06:00', '07:00', '08:00',
-                                        '09:00', '10:00', '11:00',
-                                        '12:00', '13:00', '14:00',
-                                        '15:00', '16:00', '17:00',
-                                        '18:00', '19:00', '20:00',
-                                        '21:00', '22:00', '23:00',
-                                    ],
-                                    'area': [lat, lon, lat, lon],
-                                },
-                                data_month_path)
-                            else:
-                                print(f'Data of {y}-{month} found in {data_month_path}')
+                self.download_era5_land_data_by_years(era5_land_variables, lon, lat, datetime.datetime(min(years), 1, 1), datetime.datetime(max(years), 12, 31))
                             
-                
+                from data_science_toolkit.gis import GIS
                 gis = GIS()
                 data = DataFrame()
                 
                 if column_to_fill_name == 'ta':
-                    for year in missing_data_dates:
-                        for month in missing_data_dates[year]['month']:
-                            data_month_path = 'data\era5land_' + column_to_fill_name + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
-                            data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
                     
+                    for year in years:
+                        data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
+                        data.append_dataframe(data_year.dataframe)
+                        
+                    data.rename_columns({'first': 't2m'})
                     data.reset_index()
-                    data.column_to_date('valid_time')
-                    data.reindex_dataframe("valid_time")
+                    data.column_to_date('datetime')
+                    data.reindex_dataframe("datetime")
                     data.sort()
                     data.missing_data('t2m')
                     data.transform_column('t2m', lambda o: o - 273.15)
@@ -267,32 +229,19 @@ class ClimateFiller():
                     print('Imputation of missing data for ta from ERA5-Land was done!')
                     
                 elif column_to_fill_name == 'rh':
-                    data_t2m = DataFrame()
-                    data_d2m = DataFrame()
                     
-                    for year in missing_data_dates:
-                        for month in missing_data_dates[year]['month']:
-                            month_data_t2m = 'data\era5land_' + '2m_temperature' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
-                            data_t2m.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_t2m, "ta"),)
-                    
-                    for year in missing_data_dates:
-                        for month in missing_data_dates[year]['month']:
-                            month_data_d2m = 'data\era5land_' + '2m_dewpoint_temperature' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
-                            data_d2m.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_d2m, "ta"),)
-                    
-                    data_d2m.reset_index()
-                    data_d2m.reindex_dataframe("valid_time")
-                    data_d2m.keep_columns(['d2m'])
-                    data_t2m.reset_index()
-                    data_t2m.reindex_dataframe("valid_time")
-                    data_t2m.keep_columns(['t2m'])
-                    data_t2m.join(data_d2m.get_dataframe())
-                    data = data_t2m
+                    for year in years:
+                        data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
+                        data.append_dataframe(data_year.dataframe)
+                    data.reset_index()
+                    data.column_to_date("datetime")
+                    data.reindex_dataframe("datetime")
+                    data.rename_columns({'temperature_2m': 't2m', 'dewpoint_temperature_2m': 'd2m'})
                     data.missing_data('t2m')
+                    data.missing_data('d2m')
                     data.transform_column('t2m', lambda o: o - 273.15)
                     data.transform_column('d2m', lambda o: o - 273.15)
-                    data.add_column_based_on_function('era5_hr', lambda row: Lib.get_relative_humidity(row['t2m', 'd2m']))
-                    #data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
+                    data.add_column_based_on_function('era5_hr', lambda row: Lib.relative_humidity_magnus(row['t2m'], row['d2m']))
                     data.missing_data('era5_hr')
                     nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
                     for p in nan_indices:
@@ -301,26 +250,16 @@ class ClimateFiller():
                     print('Imputation of missing data for rh from ERA5-Land was done!')
                     
                 elif column_to_fill_name == 'ws':
-                    data_u10 = DataFrame()
-                    data_v10 = DataFrame()
-                    for year in missing_data_dates:
-                        for month in missing_data_dates[year]['month']:
-                            month_data_u10 = 'data\era5land_' + '10m_u_component_of_wind' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
-                            data_u10.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_u10, "ta"),)
-                    for year in missing_data_dates:
-                        for month in missing_data_dates[year]['month']:
-                            month_data_v10 = 'data\era5land_' + '10m_v_component_of_wind' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
-                            data_v10.append_dataframe(gis.get_era5_land_grib_as_dataframe(month_data_v10, "ta"),)
                     
-                    data_u10.reset_index()
-                    data_u10.reindex_dataframe("valid_time")
-                    data_u10.keep_columns(['u10'])
-                    data_v10.reset_index()
-                    data_v10.reindex_dataframe("valid_time")
-                    data_v10.keep_columns(['v10'])
-                    data_v10.join(data_u10.get_dataframe())
-                    data = data_v10
-                    data.add_column_based_on_function('era5_ws', Lib.get_2m_wind_speed)
+                    for year in years:
+                        data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
+                        data.append_dataframe(data_year.dataframe)
+                    data.reset_index()
+                    data.column_to_date("datetime")
+                    data.reindex_dataframe("datetime")
+                    data.rename_columns({'u_component_of_wind_10m': 'u10', 'v_component_of_wind_10m': 'v10'})
+                  
+                    data.add_column_based_on_function('era5_ws', lambda row: Lib.logarithmic_wind_profile(row['u10'], row['v10']))
                     nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
                     data.missing_data('u10')
                     data.missing_data('era5_ws')
@@ -330,13 +269,15 @@ class ClimateFiller():
                     print('Imputation of missing data for wind speed from ERA5-Land was done!')
                     
                 elif column_to_fill_name == 'rs':
-                    for year in missing_data_dates:
-                        for month in missing_data_dates[year]['month']:
-                            data_month_path = 'data\era5land_' + 'surface_solar_radiation_downwards' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
-                            data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
-                            
+                    
+                    for year in years:
+                        data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
+                        data.append_dataframe(data_year.dataframe)
+                        
+                    data.rename_columns({'first': 'ssrd'})
                     data.reset_index()
-                    data.reindex_dataframe("valid_time")
+                    data.column_to_date('datetime')
+                    data.reindex_dataframe("datetime")
                     data.missing_data('ssrd')
                     l = []
                     for p in data.get_index():
@@ -362,15 +303,15 @@ class ClimateFiller():
                     print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
                 
                 elif column_to_fill_name == 'p':
-                    for year in missing_data_dates:
-                        for month in missing_data_dates[year]['month']:
-                            data_month_path = 'data\era5land_' + 'total_precipitation' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
-                            data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
-                    
+                    for year in years:
+                        data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
+                        data.append_dataframe(data_year.dataframe)
+                        
+                    data.rename_columns({'first': 'tp'})    
                     
                     data.reset_index()
-                    data.column_to_date('valid_time')
-                    data.reindex_dataframe("valid_time")
+                    data.column_to_date('datetime')
+                    data.reindex_dataframe("datetime")
                     data.sort()
                     data.missing_data('tp')
                     nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
@@ -1564,6 +1505,8 @@ class ClimateFiller():
         self.data.export(path_link, data_type, kwargs)
         
     def download_era5_land_data_by_years(self, variables, lon, lat, start_date, end_date):
+        self.check_directory_existance('data')
+        self.check_directory_existance('data/cache')
         point = ee.Geometry.Point(lon, lat)
         era5_land = ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY').filterBounds(point)
         
@@ -1572,7 +1515,7 @@ class ClimateFiller():
             start_date = datetime.datetime.strptime(start_date, '%Y-%m-%d')
             end_date = datetime.datetime.strptime(end_date, '%Y-%m-%d')
         
-        for year in range(start_date.year, end_date.year):
+        for year in range(start_date.year, end_date.year + 1):
             cache_path = 'data/cache/era5_land_' + '_'.join([str(s) for s in variables] + [str(lon), str(lat), str(year)]) + '.csv'
             
             if os.path.exists(cache_path):
