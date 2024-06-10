@@ -35,7 +35,7 @@ def main():
     cf.fill('rh', -7.86553, 31.18205)
     cf.fill('ws', -7.86553, 31.18205)
     print(cf.data.missing_data_statistics())
-    cf.data.export("data/oukaimden_imputed.csv", index=True)
+    cf.data.export("data/oukaimden_full.csv", index=True)
 
    
     print(time.time() - ti)
