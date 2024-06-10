@@ -10,17 +10,21 @@ def main():
     # Read the time series 
     #data.reindex_dataframe('datetime')
     cf = ClimateFiller(r"C:\Users\elhac\OneDrive\Desktop\kitchen\data\stations_from_youness.xlsx", 'xls', 
-                       sheet_name='oukaimeden', 
+                       sheet_name='chichaoua', 
                        usecols=[0, 1, 3, 2, 4],
-                       datetime_column_name='Date')
+                       datetime_column_name='c')
     
     # columns name in the excel file
+    # Chichawa_Hr_(%)	Chichawa_Rg_(W/m2)	Chichawa_Tair_(°C)	Chichawa_Vv_(m/s)
     # DateBis	R3_hr_(%)	R3_Rg_(W/m2)	R3_Tair_(°C)	R3_vv_(m/s)	R3_P30(mm)
     # Date	Ouka_1_Hr_(%)	Ouka_1_Rg_(W/m2)	Ouka_1_Tair_(°C)	Ouka_1_Vv_(m/s)
 
+    # sepecifically for chichaoua because the first observation is taken at 13:30
+    #cf.data.drop_rows(1)
     cf.data.resample_timeseries(skip_rows=2)
     #cf.data.rename_columns({'R3_hr_(%)': 'rh', 'R3_Rg_(W/m2)': 'rs', 'R3_Tair_(°C)': 'ta', 'R3_vv_(m/s)': 'ws', 'R3_P30(mm)': 'p'})
-    cf.data.rename_columns({'Ouka_1_Hr_(%)': 'rh', 'Ouka_1_Rg_(W/m2)': 'rs', 'Ouka_1_Tair_(°C)': 'ta', 'Ouka_1_Vv_(m/s)': 'ws'})
+    #cf.data.rename_columns({'Ouka_1_Hr_(%)': 'rh', 'Ouka_1_Rg_(W/m2)': 'rs', 'Ouka_1_Tair_(°C)': 'ta', 'Ouka_1_Vv_(m/s)': 'ws'})
+    cf.data.rename_columns({'Chichawa_Hr_(%)': 'rh', 'Chichawa_Rg_(W/m2)': 'rs', 'Chichawa_Tair_(°C)': 'ta', 'Chichawa_Vv_(m/s)': 'ws'})
     
     print(cf.data.show())
     
@@ -29,13 +33,12 @@ def main():
     # Armed	31.13003	-7.91898
     # Oukaimden	31.18205	-7.86553
 
-    
-    cf.fill('ta', -7.86553, 31.18205)
-    cf.fill('rs', -7.86553, 31.18205)
-    cf.fill('rh', -7.86553, 31.18205)
-    cf.fill('ws', -7.86553, 31.18205)
+    cf.fill('ta', -8.65185, 31.42767)
+    cf.fill('rs', -8.65185, 31.42767)
+    cf.fill('rh', -8.65185, 31.42767)
+    cf.fill('ws', -8.65185, 31.42767)
     print(cf.data.missing_data_statistics())
-    cf.data.export("data/oukaimden_full.csv", index=True)
+    cf.data.export("data/chichaoua_full.csv", index=True)
 
    
     print(time.time() - ti)
