@@ -31,7 +31,7 @@ def main():
     #cf.data.rename_columns({'Ouka_1_Hr_(%)': 'rh', 'Ouka_1_Rg_(W/m2)': 'rs', 'Ouka_1_Tair_(°C)': 'ta', 'Ouka_1_Vv_(m/s)': 'ws'})
     #cf.data.rename_columns({'Chichawa_Hr_(%)': 'rh', 'Chichawa_Rg_(W/m2)': 'rs', 'Chichawa_Tair_(°C)': 'ta', 'Chichawa_Vv_(m/s)': 'ws'})
     cf.data.rename_columns({'Aremd_Hr_(%)': 'rh', 'Aremd_Rg_(W/m2)': 'rs', 'Aremd_Tair_(°C)': 'ta', 'Aremd_IVv_(m/s)': 'ws'})
-    cf.data.reindex_dataframe('index')0
+    cf.data.reindex_dataframe('index')
     print(cf.data.show())
     # Chichaoua	31.42767	-8.65185
     # Sidi Rahal	31.65936	-7.60655
