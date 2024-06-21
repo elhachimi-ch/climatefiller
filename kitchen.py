@@ -10,9 +10,9 @@ def main():
     # Read the time series 
     #data.reindex_dataframe('datetime')
     cf = ClimateFiller(r"C:\Users\elhac\OneDrive\Desktop\kitchen\data\stations_from_youness.xlsx", 'xls', 
-                       sheet_name='chichaoua', 
+                       sheet_name='R3', 
                        usecols=[0, 1, 3, 2, 4],
-                       datetime_column_name='c')
+                       datetime_column_name='DateBis')
     
     
     #new_index = cf.data.generate_datetime_range(cf.data.get_index()[0], freq='0.5H', periods=315408)
@@ -27,7 +27,7 @@ def main():
     # sepecifically for chichaoua because the first observation is taken at 13:30
     #cf.data.drop_rows(1)
     #cf.data.resample_timeseries(skip_rows=2)
-    #cf.data.rename_columns({'R3_hr_(%)': 'rh', 'R3_Rg_(W/m2)': 'rs', 'R3_Tair_(°C)': 'ta', 'R3_vv_(m/s)': 'ws'})
+    cf.data.rename_columns({'R3_hr_(%)': 'rh', 'R3_Rg_(W/m2)': 'rs', 'R3_Tair_(°C)': 'ta', 'R3_vv_(m/s)': 'ws'})
     #cf.data.rename_columns({'Ouka_1_Hr_(%)': 'rh', 'Ouka_1_Rg_(W/m2)': 'rs', 'Ouka_1_Tair_(°C)': 'ta', 'Ouka_1_Vv_(m/s)': 'ws'})
     #cf.data.rename_columns({'Chichawa_Hr_(%)': 'rh', 'Chichawa_Rg_(W/m2)': 'rs', 'Chichawa_Tair_(°C)': 'ta', 'Chichawa_Vv_(m/s)': 'ws'})
     #cf.data.rename_columns({'Aremd_Hr_(%)': 'rh', 'Aremd_Rg_(W/m2)': 'rs', 'Aremd_Tair_(°C)': 'ta', 'Aremd_IVv_(m/s)': 'ws'})
