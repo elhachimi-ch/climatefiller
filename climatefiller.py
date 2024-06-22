@@ -58,7 +58,7 @@ class ClimateFiller():
         self.elevation = elevation
         self.backend = backend
         if backend == 'gee':
-            ee.Initialize()
+            ee.Initialize(project='climatefiller-427208')
         if data_link is None:
             self.data = DataFrame()
         else:
