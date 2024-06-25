@@ -1036,7 +1036,15 @@ class ClimateFiller():
                     ))
                 self.data.transform_column('et0_pm', lambda o: o if o > 0 else 0)
             elif method == 'pt':
-                self.data.add_column_based_on_function('et0_hargreaves', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
+                self.data.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
+            elif method == 'hs':
+                self.data.add_column_based_on_function('et0_hs', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
+            elif method == 'ab':
+                self.data.add_column_based_on_function('et0_ab', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
+            elif method == 'tu':
+                self.data.add_column_based_on_function('et0_tu', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
+            elif method == 'sd':
+                self.data.add_column_based_on_function('et0_sd', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
         
         if verbose is True:
             print(et0_data.get_dataframe())

@@ -491,7 +491,7 @@ class Lib:
         return rn_l
     
     @staticmethod
-    def et0_hargreaves(row):
+    def et0_hargreaves_samani(row):
         ta_mean, ta_max, ta_min, lat, doy =  row['ta_mean'], row['ta_max'], row['ta_min'], row['lat'], row['doy']
         
         # constants
@@ -701,6 +701,117 @@ class Lib:
         
         # Conversion from W/m² to kJ/m²/day
         rs_kj_per_m2 = (row['rs_mean'] * seconds_per_day) / 1000  # Convert joules to kilojoules
+        
+        #elevation = row['elevation']
+        GHO = Lib.DENSITY_OF_WATER
+        lambda_v = 2266
+        DELTA = 4.95e-4
+        
+        
+        if ta_c < 0:
+            slope = 0.3405 * (math.exp(0.06642 * ta_c))
+        else:
+            slope = 0.3221 * (math.exp(0.0803 * (ta_c ** 0.8876)))
+        
+        et0 = ((1.3) / (lambda_v * GHO)) * ((slope)/(slope + DELTA)) * rs_kj_per_m2
+        return et0 * 1000
+    
+    @staticmethod
+    def et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name):
+        """
+        Calculate the reference evapotranspiration using the Priestley-Taylor method.
+
+        Parameters:
+        alpha (float): Empirical coefficient, typically around 1.26.
+        Delta (float): Slope of the saturation vapor pressure curve at air temperature (kPa/°C).
+        gamma (float): Psychrometric constant (kPa/°C).
+        Rn (float): Net radiation at the crop surface (MJ/m²/day).
+        G (float): Soil heat flux (MJ/m²/day), often assumed to be zero for daily calculations.
+
+        Returns:
+        float: Estimated ET0 in mm/day.
+        """
+        
+        ta_c = row[ta_column_name]
+        
+        seconds_per_day = 3600 # 43200 for 12 hours number of seconds in a day 86400 for 24 hours
+        
+        # Conversion from W/m² to kJ/m²/day
+        rs_kj_per_m2 = (row[rs_column_name] * seconds_per_day) / 1000  # Convert joules to kilojoules
+        
+        #elevation = row['elevation']
+        GHO = Lib.DENSITY_OF_WATER
+        lambda_v = 2266
+        DELTA = 4.95e-4
+        
+        
+        if ta_c < 0:
+            slope = 0.3405 * (math.exp(0.06642 * ta_c))
+        else:
+            slope = 0.3221 * (math.exp(0.0803 * (ta_c ** 0.8876)))
+        
+        et0 = ((1.3) / (lambda_v * GHO)) * ((slope)/(slope + DELTA)) * rs_kj_per_m2
+        return et0 * 1000
+    
+    @staticmethod
+    def et0_turc(row, ta_column_name, rs_column_name):
+        """
+        Calculate the reference evapotranspiration using the Priestley-Taylor method.
+
+        Parameters:
+        alpha (float): Empirical coefficient, typically around 1.26.
+        Delta (float): Slope of the saturation vapor pressure curve at air temperature (kPa/°C).
+        gamma (float): Psychrometric constant (kPa/°C).
+        Rn (float): Net radiation at the crop surface (MJ/m²/day).
+        G (float): Soil heat flux (MJ/m²/day), often assumed to be zero for daily calculations.
+
+        Returns:
+        float: Estimated ET0 in mm/day.
+        """
+        
+        ta_c = row[ta_column_name]
+        
+        seconds_per_day = 3600 # 43200 for 12 hours number of seconds in a day 86400 for 24 hours
+        
+        # Conversion from W/m² to kJ/m²/day
+        rs_kj_per_m2 = (row[rs_column_name] * seconds_per_day) / 1000  # Convert joules to kilojoules
+        
+        #elevation = row['elevation']
+        GHO = Lib.DENSITY_OF_WATER
+        lambda_v = 2266
+        DELTA = 4.95e-4
+        
+        
+        if ta_c < 0:
+            slope = 0.3405 * (math.exp(0.06642 * ta_c))
+        else:
+            slope = 0.3221 * (math.exp(0.0803 * (ta_c ** 0.8876)))
+        
+        et0 = ((1.3) / (lambda_v * GHO)) * ((slope)/(slope + DELTA)) * rs_kj_per_m2
+        return et0 * 1000
+    
+    @staticmethod
+    def et0_abtew(row, ta_column_name, rs_column_name):
+        """
+        Calculate the reference evapotranspiration using the Priestley-Taylor method.
+
+        Parameters:
+        alpha (float): Empirical coefficient, typically around 1.26.
+        Delta (float): Slope of the saturation vapor pressure curve at air temperature (kPa/°C).
+        gamma (float): Psychrometric constant (kPa/°C).
+        Rn (float): Net radiation at the crop surface (MJ/m²/day).
+        G (float): Soil heat flux (MJ/m²/day), often assumed to be zero for daily calculations.
+
+        Returns:
+        float: Estimated ET0 in mm/day.
+        """
+        
+        ta_c = row[ta_column_name]
+        
+        seconds_per_day = 3600 # 43200 for 12 hours number of seconds in a day 86400 for 24 hours
+        
+        # Conversion from W/m² to kJ/m²/day
+        rs_kj_per_m2 = (row[rs_column_name] * seconds_per_day) / 1000  # Convert joules to kilojoules
         
         #elevation = row['elevation']
         GHO = Lib.DENSITY_OF_WATER
