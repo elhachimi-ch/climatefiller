@@ -1020,6 +1020,12 @@ class ClimateFiller():
                 et0_data.reindex_dataframe(self.datetime_column_name)
                 et0_data.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
                 et0_data.add_column_based_on_function('et0_ab', Lib.et0_abtew)
+                
+            elif method == 'tu':
+                et0_data.reindex_dataframe(self.datetime_column_name)
+                et0_data.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
+                et0_data.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
+                et0_data.add_column_based_on_function('et0_tu', Lib.et0_turc)
             
             self.data.set_dataframe(et0_data.get_dataframe())
                 

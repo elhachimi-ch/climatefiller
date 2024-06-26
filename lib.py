@@ -801,7 +801,7 @@ class Lib:
         return et0
     
     @staticmethod
-    def et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name):
+    def et0_turc(row):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -816,23 +816,22 @@ class Lib:
         float: Estimated ET0 in mm/day.
         """
         
-        ta_c = row[ta_column_name]
+        LAMBDA = 2.45
+        ta_mean_c = row['ta_mean']
+        rh_mean = row['rh_mean'] / 100
+        rs_mean = row['rs_mean']
         
-        seconds_per_day = 3600 # 43200 for 12 hours number of seconds in a day 86400 for 24 hours
+        seconds_per_day = 43200 # 43200 for 12 hours number of seconds in a day 86400 for 24 hours
         
-        # Conversion from W/m² to kJ/m²/day
-        rs_kj_per_m2 = (row[rs_column_name] * seconds_per_day) / 1000  # Convert joules to kilojoules
+        # Conversion from W/m² to MJ/m²/day
+        rs_mj_per_m2 = (rs_mean * seconds_per_day) / 1000000  # Convert joules to Megajoules
         
-        #elevation = row['elevation']
-        GHO = Lib.DENSITY_OF_WATER
-        lambda_v = 2266
-        DELTA = 4.95e-4
-        
-        
-        if ta_c < 0:
-            slope = 0.3405 * (math.exp(0.06642 * ta_c))
-        else:
-            slope = 0.3221 * (math.exp(0.0803 * (ta_c ** 0.8876)))
-        
-        et0 = ((1.3) / (lambda_v * GHO)) * ((slope)/(slope + DELTA)) * rs_kj_per_m2
-        return et0 * 1000
+        if ta_mean_c < 0:
+            et0 = 0
+        elif ta_mean_c > 0 and rh_mean < 0.5:
+            et0 = 0.013 * ( (ta_mean_c) / (ta_mean_c + 15)) * ((23.89 * rs_mj_per_m2) + 50) * (1 + ( (50 - rh_mean) / 70))
+        elif ta_mean_c > 0 and rh_mean > 0.5:
+            et0 = 0.013 * ( (ta_mean_c) / (ta_mean_c + 15)) * ((23.89 * rs_mj_per_m2) + 50)
+            #et0 = 0.013 * ( (ta_mean_c) / (ta_mean_c + 15)) * (((23.88 * rs_kj_per_m2) + 50) / LAMBDA)
+            
+        return et0
