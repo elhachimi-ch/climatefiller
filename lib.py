@@ -34,18 +34,14 @@ class Lib:
     CP = 1.013e-3  # Specific heat of air at constant pressure (MJ/kg°C)
     EPSILON = 0.622  # Ratio molecular weight of water vapor/dry air
     PI = math.pi
+    LATENT_HEAT_OF_VAPORIZATION = 2.45  # Latent heat of vaporization for water (MJ/kg)
     
     def __init__(self, *args, **kwargs):
         pass
          
     
     @staticmethod
-    def et0_penman_monteith(
-        row,
-        ta_column_name,
-        rs_column_name,
-        rh_column_name,
-        u_column_name):
+    def et0_penman_monteith(row):
         # input variables
         # T = 25.0  # air temperature in degrees Celsius
         # RH = 60.0  # relative humidity in percent
@@ -128,7 +124,7 @@ class Lib:
         ta_column_name,
         rs_column_name,
         rh_column_name,
-        u_column_name,
+        ws_column_name,
         standard_meridian,
         reference_crop,
         ):
@@ -139,7 +135,7 @@ class Lib:
         # Rs = 15.0  # incoming solar radiation in MJ/m2/day
         # lat = 35.0  # latitude in degrees
         
-        ta_c, rs, rh, u2, lat, elevation, doy, lon, hod =  row[ta_column_name], row[rs_column_name], row[rh_column_name], row[u_column_name], row['lat'], row['elevation'], row['doy'], row['lon'], row['hod']
+        ta_c, rs, rh, u2, lat, elevation, doy, lon, hod =  row[ta_column_name], row[rs_column_name], row[rh_column_name], row[ws_column_name], row['lat'], row['elevation'], row['doy'], row['lon'], row['hod']
         
         # convert units
         rs *= 3.6e-3  # convert watts per square meter to megajoules per square meter 0.0288 = 60x60x8hours or 0.0864 for 24 hours
@@ -754,7 +750,7 @@ class Lib:
         return et0 * 1000
     
     @staticmethod
-    def et0_turc(row, ta_column_name, rs_column_name):
+    def et0_schendel(row):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -769,29 +765,15 @@ class Lib:
         float: Estimated ET0 in mm/day.
         """
         
-        ta_c = row[ta_column_name]
-        
-        seconds_per_day = 3600 # 43200 for 12 hours number of seconds in a day 86400 for 24 hours
-        
-        # Conversion from W/m² to kJ/m²/day
-        rs_kj_per_m2 = (row[rs_column_name] * seconds_per_day) / 1000  # Convert joules to kilojoules
-        
-        #elevation = row['elevation']
-        GHO = Lib.DENSITY_OF_WATER
-        lambda_v = 2266
-        DELTA = 4.95e-4
+        ta_mean_c = row['ta_mean']
+        rh_mean = row['rh_mean']
         
         
-        if ta_c < 0:
-            slope = 0.3405 * (math.exp(0.06642 * ta_c))
-        else:
-            slope = 0.3221 * (math.exp(0.0803 * (ta_c ** 0.8876)))
-        
-        et0 = ((1.3) / (lambda_v * GHO)) * ((slope)/(slope + DELTA)) * rs_kj_per_m2
-        return et0 * 1000
+        et0 = 16 * (ta_mean_c / rh_mean)
+        return et0
     
     @staticmethod
-    def et0_abtew(row, ta_column_name, rs_column_name):
+    def et0_abtew(row):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -806,26 +788,17 @@ class Lib:
         float: Estimated ET0 in mm/day.
         """
         
-        ta_c = row[ta_column_name]
-        
-        seconds_per_day = 3600 # 43200 for 12 hours number of seconds in a day 86400 for 24 hours
-        
+        rs_mean_w_per_m2 = row['rs_mean']
+        seconds_per_day = 43200 # 43200 for 12 hours number of seconds in a day 86400 for 24 hours
         # Conversion from W/m² to kJ/m²/day
-        rs_kj_per_m2 = (row[rs_column_name] * seconds_per_day) / 1000  # Convert joules to kilojoules
+        rs_mj_per_m2 = (rs_mean_w_per_m2 * seconds_per_day) / 1000000  # Convert joules to kilojoules
         
-        #elevation = row['elevation']
-        GHO = Lib.DENSITY_OF_WATER
-        lambda_v = 2266
-        DELTA = 4.95e-4
+        lambda_v = Lib.LATENT_HEAT_OF_VAPORIZATION
+        K1 = 0.53
         
         
-        if ta_c < 0:
-            slope = 0.3405 * (math.exp(0.06642 * ta_c))
-        else:
-            slope = 0.3221 * (math.exp(0.0803 * (ta_c ** 0.8876)))
-        
-        et0 = ((1.3) / (lambda_v * GHO)) * ((slope)/(slope + DELTA)) * rs_kj_per_m2
-        return et0 * 1000
+        et0 = K1 * (rs_mj_per_m2 / lambda_v)
+        return et0
     
     @staticmethod
     def et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name):

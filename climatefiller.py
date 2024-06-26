@@ -942,7 +942,7 @@ class ClimateFiller():
                        ta_column_name='ta',
                        rs_column_name='rs',
                        rh_column_name='rh',
-                       u_column_name='u',
+                       ws_column_name='ws',
                        method='pm',
                        verbose=False,
                        freq='d',
@@ -977,42 +977,53 @@ class ClimateFiller():
         """
         
         et0_data = DataFrame()
+       
         if freq == 'd':
+            
             et0_data.add_column('ta_mean', self.data.resample_timeseries(in_place=False)[ta_column_name])
             et0_data.add_column('ta_max', self.data.resample_timeseries(in_place=False, agg='max')[ta_column_name])
             et0_data.add_column('ta_min', self.data.resample_timeseries(in_place=False, agg='min')[ta_column_name], )
-            et0_data.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[rh_column_name])
-            et0_data.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[rh_column_name])
-            et0_data.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
-            et0_data.add_column('u_mean', self.data.resample_timeseries(in_place=False)[u_column_name])
-            et0_data.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
+            
+            et0_data.show()
             et0_data.index_to_column()
             et0_data.add_doy_column('doy', self.datetime_column_name)
-            
-            if self.elevation is None:
-                et0_data.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
-            else:
-                et0_data.add_one_value_column('elevation', self.elevation)
-            
             et0_data.add_one_value_column('lat', self.lat)
-        
+            
             if method == 'pm':
-                et0_data.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith(
-                    row, 
-                    ta_column_name,
-                    rs_column_name,
-                    rh_column_name,
-                    u_column_name
-                    ))
-            elif method == 'hargreaves':
-                et0_data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
+                et0_data.reindex_dataframe(self.datetime_column_name)
+                et0_data.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[rh_column_name])
+                et0_data.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[rh_column_name])
+                et0_data.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
+                et0_data.add_column('u_mean', self.data.resample_timeseries(in_place=False)[ws_column_name])
+                et0_data.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
+                
+                
+                if self.elevation is None:
+                    et0_data.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
+                else:
+                    et0_data.add_one_value_column('elevation', self.elevation)
+                
+                et0_data.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith(row))
+            
+            elif method == 'hs':
+                et0_data.add_column_based_on_function('et0_hs', lambda row: Lib.et0_hargreaves_samani(row))
+           
             elif method == 'pt':
                 et0_data.add_column_based_on_function('et0_pt', Lib.et0_priestley_taylor)
+                
+            elif method == 'sd':
+                et0_data.reindex_dataframe(self.datetime_column_name)
+                et0_data.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
+                et0_data.add_column_based_on_function('et0_sd', Lib.et0_schendel)
+                
+            elif method == 'ab':
+                et0_data.reindex_dataframe(self.datetime_column_name)
+                et0_data.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
+                et0_data.add_column_based_on_function('et0_ab', Lib.et0_abtew)
             
             self.data.set_dataframe(et0_data.get_dataframe())
                 
         elif freq == 'h':
-            self.data.index_to_column()
             self.data.add_doy_column(datetime_column_name=self.datetime_column_name)
             self.data.add_hod_column(datetime_column_name=self.datetime_column_name)
             
@@ -1030,15 +1041,13 @@ class ClimateFiller():
                     ta_column_name,
                     rs_column_name,
                     rh_column_name,
-                    u_column_name,
+                    ws_column_name,
                     self.standard_meridian,
                     reference_crop
                     ))
                 self.data.transform_column('et0_pm', lambda o: o if o > 0 else 0)
             elif method == 'pt':
                 self.data.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
-            elif method == 'hs':
-                self.data.add_column_based_on_function('et0_hs', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
             elif method == 'ab':
                 self.data.add_column_based_on_function('et0_ab', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
             elif method == 'tu':
