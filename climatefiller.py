@@ -1010,7 +1010,7 @@ class ClimateFiller():
            
             elif method == 'pt':
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
-                
+                data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
                 
                 if self.elevation is None:
                     data_temp.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
@@ -1018,10 +1018,8 @@ class ClimateFiller():
                     data_temp.add_one_value_column('elevation', self.elevation)
                 
                 data_temp.add_one_value_column('lat', self.lat)
-                data_temp.add_one_value_column('lon', self.lat)
                 
-                data_temp.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily(
-                    row))
+                data_temp.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily_v1(row))
                 
             elif method == 'sd':
                 data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
@@ -1035,6 +1033,14 @@ class ClimateFiller():
                 data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
                 data_temp.add_column_based_on_function('et0_tu', Lib.et0_turc)
+           
+            elif method == 'ma':
+                if self.elevation is None:
+                    data_temp.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
+                else:
+                    data_temp.add_one_value_column('elevation', self.elevation)
+                data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
+                data_temp.add_column_based_on_function('et0_ma', Lib.et0_makkink)
             
             self.et0_output_data.set_dataframe(data_temp.get_dataframe())
                 

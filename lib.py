@@ -152,7 +152,7 @@ class Lib:
         epsilon_net = 0.34 - (0.14 * math.sqrt(ea))
         
         # slope of the vapor pressure curve in kPa/K
-        delta = Lib.slope_vapor_pressure_curve(ta_c)
+        delta = Lib.slope_of_saturation_vapor_pressure(ta_c)
         
         # psychrometric constant in kPa/K
         gamma = Lib.psychrometric_constant(elevation, ta_c)
@@ -557,7 +557,7 @@ class Lib:
         return rh
     
     @staticmethod
-    def slope_vapor_pressure_curve(t_c, method='standard'):
+    def slope_saturation_vapor_pressure_curve(t_c, method='standard'):
         """
         Calculate the slope of the saturation vapor pressure curve at a given temperature.
         
@@ -575,7 +575,15 @@ class Lib:
         return delta
     
     @staticmethod
-    def calculate_slope_of_saturation_vapor_pressure(ta_c):
+    def slope_of_saturation_vapor_pressure(ta_c):
+        """_summary_
+
+        Args:
+            ta_c : air temperature in C
+
+        Returns:
+            delta: Return the slope of the saturation vapor pressure curve in KPa/C
+        """
         # Constants
         L = 2260 * 1000  # Latent heat of vaporization for water (J/kg)
         R_v = 461.5      # Specific gas constant for water vapor (J/(kg*K))
@@ -587,10 +595,10 @@ class Lib:
         # Clausius-Clapeyron equation to calculate the slope (d es/dT)
         slope = (L * e_s) / (R_v * ta_k**2)
         
-        # Convert slope from Pa/K to hPa/K for practical purposes
-        slope_hPa_per_K = slope / 100
+        # Convert slope from Pa/K to KPa/C for practical purposes
+        slope_kpa_per_c = slope / 1000
         
-        return slope_hPa_per_K
+        return slope_kpa_per_c
     
     @staticmethod
     def extraterrestrial_radiation_hourly(doy, latitude, longitude, hod, standard_meridian):
@@ -677,89 +685,69 @@ class Lib:
     
     
     @staticmethod
-    def et0_priestley_taylor(
-        row,
-        ta_column_name,
-        rs_column_name,
-        rh_column_name,
-        standard_meridian,
-        reference_crop,
-        ):
+    def et0_priestley_taylor_daily_v1(row):
         # input variables
         # T = 25.0  # air temperature in degrees Celsius
         # RH = 60.0  # relative humidity in percent
         # u2 = 2.0  # wind speed at 2 m height in m/s
         # Rs = 15.0  # incoming solar radiation in MJ/m2/day
         # lat = 35.0  # latitude in degrees
-        
+        G = 0 
         # empirical parameter
         alpha = 1.26
         
-        ta_c, rs, rh, lat, elevation, doy, lon, hod =  row[ta_column_name], row[rs_column_name], row[rh_column_name], row['lat'], row['elevation'], row['doy'], row['lon'], row['hod']
+        ta_mean_c, rs_mean, rh_mean, lat, elevation, doy =  row['ta_mean'], row['rs_mean'], row['rh_mean'], row['lat'], row['elevation'], row['doy']
         
         # convert units
-        rs *= 3.6e-3  # convert watts per square meter to megajoules per square meter 0.0288 = 60x60x8hours or 0.0864 for 24 hours
-        
-        lambda_heat = Lib.latent_heat_of_vaporization(ta_c)
+        rs_mean *= 2.88e-2  # convert watts per square meter to megajoules per square meter 0.0288 = 60x60x8hours or 0.0864 for 24 hours
         
         # saturation vapor pressure in kPa
-        es = Lib.saturation_vapor_pressure(ta_c)
+        es = Lib.saturation_vapor_pressure(ta_mean_c)
         
-        ea = Lib.actual_vapor_pressure(es, rh)
+        ea = Lib.actual_vapor_pressure(es, rh_mean)
         
         epsilon_net = 0.34 - (0.14 * math.sqrt(ea))
         
         # slope of the vapor pressure curve in kPa/K
-        delta = Lib.slope_vapor_pressure_curve(ta_c)
+        delta = Lib.slope_vapor_pressure_curve(ta_mean_c)
         
         # psychrometric constant in kPa/K
-        gamma = Lib.psychrometric_constant(elevation, ta_c)
+        gamma = Lib.psychrometric_constant(elevation, ta_mean_c)
         
         # Calculate extraterrestrial radiation
-        ra = Lib.extraterrestrial_radiation_hourly(doy, lat, lon, hod, standard_meridian)
+        ra = Lib.extraterrestrial_radiation(lat, doy)
         
         # Calculate net solar shortwave radiation 
-        rns = (1 - Lib.ALBEDO) * rs
+        rns = (1 - Lib.ALBEDO) * rs_mean
         
         # Rso
         rso = Lib.rso(ra, elevation)
         
         # cloudness factor
-        f = Lib.cloudness_factor(rs, rso)
+        f = Lib.cloudness_factor(rs_mean, rso)
         
-        rnl = f * epsilon_net * Lib.stephan_boltzmann(ta_c)
+        rnl = f * epsilon_net * Lib.stephan_boltzmann(ta_mean_c)
     
         rn = (0.77 * rns) - rnl
         
-        if reference_crop == 'grass':
-            crop_dependent_factor = 37
-            if rn > 0:
-                g = 0.1 * rn
-                # Bulk surface resistance and aerodynamic resistance coefficient
-                CD = 0.24 
-            else:
-                g = 0.5 * rn
-                # Bulk surface resistance and aerodynamic resistance coefficient
-                CD = 0.96 
-        elif reference_crop == 'alfalfa':
-            crop_dependent_factor = 66
-            if rn > 0:
-                g = 0.01 * rn
-                # Bulk surface resistance and aerodynamic resistance coefficient
-                CD = 0.25 
-            else:
-                g = 0.2 * rn
-                # Bulk surface resistance and aerodynamic resistance coefficient
-                CD = 1.7
+        if rn > 0:
+            g = 0.1 * rn
+            # Bulk surface resistance and aerodynamic resistance coefficient
+            CD = 0.24 
+        else:
+            g = 0.5 * rn
+            # Bulk surface resistance and aerodynamic resistance coefficient
+            CD = 0.96 
         
-        et0 = (alpha * delta * (rn - g)) / (delta + gamma)
+        
+        et0 = (alpha * delta * (rn - G)) / (delta + gamma)
             
         # output result
         return et0
     
     
     @staticmethod
-    def et0_priestley_taylor_daily(row):
+    def et0_priestley_taylor_daily_v2(row):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -785,7 +773,6 @@ class Lib:
         GHO = Lib.DENSITY_OF_WATER
         lambda_v = 2266
         DELTA = 4.95e-4
-        
         
         if ta_c < 0:
             slope = 0.3405 * (math.exp(0.06642 * ta_c))
@@ -917,4 +904,61 @@ class Lib:
             et0 = 0.013 * ( (ta_mean_c) / (ta_mean_c + 15)) * ((23.89 * rs_mj_per_m2) + 50)
             #et0 = 0.013 * ( (ta_mean_c) / (ta_mean_c + 15)) * (((23.88 * rs_kj_per_m2) + 50) / LAMBDA)
             
+        return et0
+    
+    @staticmethod
+    def et0_mahringer(row):
+        """
+        Calculate the reference evapotranspiration using the Priestley-Taylor method.
+
+        Parameters:
+        alpha (float): Empirical coefficient, typically around 1.26.
+        Delta (float): Slope of the saturation vapor pressure curve at air temperature (kPa/°C).
+        gamma (float): Psychrometric constant (kPa/°C).
+        Rn (float): Net radiation at the crop surface (MJ/m²/day).
+        G (float): Soil heat flux (MJ/m²/day), often assumed to be zero for daily calculations.
+
+        Returns:
+        float: Estimated ET0 in mm/day.
+        """
+        
+        LAMBDA = 2.45
+        ws_mean = row['ws_mean']
+        rh_mean = row['rh_mean'] / 100
+        ta_mean = row['ta_mean']
+        
+        seconds_per_day = 43200 # 43200 for 12 hours number of seconds in a day 86400 for 24 hours
+        
+        et0 = (0.15072 * math.sqrt(3.6 *ws_mean) + 0.062 * ws_mean) * (Lib.saturation_vapor_pressure(ta_mean) - Lib.actual_vapor_pressure(ta_mean, rh_mean))
+        return et0
+    
+    @staticmethod
+    def et0_makkink(row):
+        """
+        Calculate the reference evapotranspiration using the Priestley-Taylor method.
+
+        Parameters:
+        alpha (float): Empirical coefficient, typically around 1.26.
+        Delta (float): Slope of the saturation vapor pressure curve at air temperature (kPa/°C).
+        gamma (float): Psychrometric constant (kPa/°C).
+        Rn (float): Net radiation at the crop surface (MJ/m²/day).
+        G (float): Soil heat flux (MJ/m²/day), often assumed to be zero for daily calculations.
+
+        Returns:
+        float: Estimated ET0 in mm/day.
+        """
+        
+        
+        rs_mean = row['rs_mean']
+        ta_mean = row['ta_mean']
+        elevation = row['elevation']
+        
+        delta = Lib.slope_saturation_vapor_pressure_curve(ta_mean)
+        gama = Lib.psychrometric_constant(elevation, ta_mean)
+        lam = Lib.latent_heat_of_vaporization(ta_mean)
+        print(gama)
+        # convert units
+        rs_mean *= 2.88e-2  # convert watts per square meter to megajoules per square meter 0.0288 = 60x60x8hours or 0.0864 for 24 hours
+        
+        et0 = (0.65 * delta * rs_mean) / ((delta + gama) * lam)
         return et0
