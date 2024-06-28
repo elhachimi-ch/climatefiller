@@ -1072,6 +1072,7 @@ class ClimateFiller():
                     rs_column_name,
                     rh_column_name,
                     self.standard_meridian, reference_crop))
+                self.et0_output_data.transform_column('et0_pt', lambda o: o if o > 0 else 0)
                 
             elif method == 'ab':
                 self.et0_output_data.add_column_based_on_function('et0_ab', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
