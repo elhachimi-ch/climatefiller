@@ -979,7 +979,8 @@ class ClimateFiller():
         
         
         data_temp = DataFrame() 
-       
+        self.data.transform_column(rs_column_name, lambda o: o if o > 0 else 0)
+        
         if freq == 'd':
             data_temp.add_column('ta_mean', self.data.resample_timeseries(in_place=False)[ta_column_name])
             data_temp.add_column('ta_max', self.data.resample_timeseries(in_place=False, agg='max')[ta_column_name])
@@ -994,16 +995,19 @@ class ClimateFiller():
                 data_temp.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[rh_column_name])
                 data_temp.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[rh_column_name])
                 data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
-                data_temp.add_column('u_mean', self.data.resample_timeseries(in_place=False)[ws_column_name])
-                data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
-                
+                data_temp.add_column('ws_mean', self.data.resample_timeseries(in_place=False)[ws_column_name])
+                self.data.show()
+                self.watt_to_megaj_per_hour(rs_column_name)
+                data_temp.show()
+                self.data.show()
+                data_temp.add_column('rs_daily', self.data.resample_timeseries(agg='sum', in_place=False)[rs_column_name])
                 
                 if self.elevation is None:
                     data_temp.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
                 else:
                     data_temp.add_one_value_column('elevation', self.elevation)
                 
-                data_temp.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith(row))
+                data_temp.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith_daily_v1(row))
             
             elif method == 'hs':
                 data_temp.add_column_based_on_function('et0_hs', lambda row: Lib.et0_hargreaves_samani(row))
@@ -1021,6 +1025,7 @@ class ClimateFiller():
                 
                 data_temp.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily_v1(row))
                 
+                
             elif method == 'sd':
                 data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
                 data_temp.add_column_based_on_function('et0_sd', Lib.et0_schendel)
@@ -1034,13 +1039,13 @@ class ClimateFiller():
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
                 data_temp.add_column_based_on_function('et0_tu', Lib.et0_turc)
            
-            elif method == 'ma':
+            elif method == 'mk':
                 if self.elevation is None:
                     data_temp.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
                 else:
                     data_temp.add_one_value_column('elevation', self.elevation)
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
-                data_temp.add_column_based_on_function('et0_ma', Lib.et0_makkink)
+                data_temp.add_column_based_on_function('et0_mk', Lib.et0_makkink)
             
             self.et0_output_data.set_dataframe(data_temp.get_dataframe())
                 
@@ -1058,6 +1063,7 @@ class ClimateFiller():
                 
             self.et0_output_data.add_one_value_column('lat', self.lat)
             self.et0_output_data.add_one_value_column('lon', self.lat)
+            
             
             if method == 'pm':
                 self.et0_output_data.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith_hourly(
@@ -1680,6 +1686,9 @@ class ClimateFiller():
         if not os.path.exists(directory_path):
             os.makedirs(directory_path)
             print(f"Directory created: {directory_path}")
+            
+    def watt_to_megaj_per_hour(self, column_name='rs'):
+        self.data.transform_column(column_name, lambda o: o * 0.0036)
             
 
     """def learn_error(self,):

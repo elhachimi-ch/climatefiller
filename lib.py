@@ -41,7 +41,7 @@ class Lib:
          
     
     @staticmethod
-    def et0_penman_monteith(row):
+    def et0_penman_monteith_daily_v1(row):
         # input variables
         # T = 25.0  # air temperature in degrees Celsius
         # RH = 60.0  # relative humidity in percent
@@ -49,7 +49,7 @@ class Lib:
         # Rs = 15.0  # incoming solar radiation in MJ/m2/day
         # lat = 35.0  # latitude in degrees
         
-        ta_max, ta_min, rh_max, rh_min, u2_mean, rs_mean, lat, elevation, doy =  row['ta_max'], row['ta_min'], row['rh_max'], row['rh_min'], row['u_mean'], row['rs_mean'], row['lat'], row['elevation'], row['doy']
+        ta_max, ta_min, rh_max, rh_min, u2_mean, rs_daily, lat, elevation, doy =  row['ta_max'], row['ta_min'], row['rh_max'], row['rh_min'], row['ws_mean'], row['rs_daily'], row['lat'], row['elevation'], row['doy']
         
         # constants
         ALBEDO = 0.23  # Albedo coefficient for grass reference surface
@@ -58,8 +58,6 @@ class Lib:
         G = 0  # Soil heat flux density (MJ/m2/day)
         z = 2 # Convert wind speed measured at different heights above the soil surface to wind speed at 2 m above the surface, assuming a short grass surface.
 
-        # convert units 12 assume hours of day 4.32e-2 
-        rs_mean *= 4.32e-2  # convert watts per square meter to megajoules per square meter 2.88e-2 = 60x60x8hours or 0.0864 for 24 hours
         ta_mean = (ta_max + ta_min) / 2
         ta_max_kelvin = ta_max + 273.16  # air temperature in Kelvin
         ta_min_kelvin = ta_min + 273.16  # air temperature in Kelvin
@@ -80,7 +78,7 @@ class Lib:
         # when using equipement where errors in estimation rh min can be large or when rh data integrity are in doubt use only rh_max term
         #ea = ea_min_term  
         
-        delta = Lib.slope_vapor_pressure_curve(ta_mean) # slope of the vapor pressure curve in kPa/K
+        delta = Lib.slope_saturation_vapor_pressure_curve(ta_mean) # slope of the vapor pressure curve in kPa/K
         
         # psychrometric constant in kPa/K
         gamma = Lib.psychrometric_constant(elevation, ta_mean)
@@ -95,11 +93,11 @@ class Lib:
         rso = (0.75 + (2e-5 * elevation)) * ra
         
         # Calculate net solar shortwave radiation 
-        rns = (1 - ALBEDO) * rs_mean
+        rns = (1 - ALBEDO) * rs_daily
         
         # Calculate net longwave radiation
         
-        rnl = SIGMA * (((math.pow(ta_max_kelvin, 4) + math.pow(ta_min_kelvin, 4)) / 2) * (0.34 - (0.14 * math.sqrt(ea))) * ((1.35 * (rs_mean / rso)) - 0.35))
+        rnl = SIGMA * (((math.pow(ta_max_kelvin, 4) + math.pow(ta_min_kelvin, 4)) / 2) * (0.34 - (0.14 * math.sqrt(ea))) * ((1.35 * (rs_daily / rso)) - 0.35))
         
         # Calculate net radiation
         rn = rns - rnl
@@ -113,7 +111,7 @@ class Lib:
         wind_term = pt * tt * (es - ea)
         et0 = radiation_term + wind_term """
         
-        et0 = ((0.408 * delta * (rn - G)) + gamma * ((900 / (ta_mean + 273)) * u2 * (es - ea))) / (delta + (gamma * (1 + 0.34 * u2)))
+        et0 = ((0.408 * delta * (rn - G)) + gamma * ((900 / (ta_mean + 273)) * u2 * (es - ea))) / (delta + (gamma * (1 + (0.34 * u2))))
 
         # output result
         return et0
@@ -205,6 +203,80 @@ class Lib:
         
         # Aerodynamic Term
         aerodynamic_term = (gamma * ((crop_dependent_factor) / (ta_k)) * u2 * (es - ea)) / denominator
+        
+        
+        et0 = radiation_term + aerodynamic_term
+            
+        # output result
+        return et0
+    
+    @staticmethod
+    def et0_penman_monteith_daily_v2(
+        row,
+        ):
+        # input variables
+        # T = 25.0  # air temperature in degrees Celsius
+        # RH = 60.0  # relative humidity in percent
+        # u2 = 2.0  # wind speed at 2 m height in m/s
+        # Rs = 15.0  # incoming solar radiation in MJ/m2/day
+        # lat = 35.0  # latitude in degrees
+        G = 0
+        
+        ta_mean_c, rs_daily, rh_mean, ws_mean, lat, elevation, doy =  row['ta_mean'], row['rs_daily'], row['rh_mean'], row['ws_mean'], row['lat'], row['elevation'], row['doy']
+        
+        ta_mean_k = ta_mean_c + 273.16  # air temperature in Kelvin
+        
+        lambda_heat = Lib.latent_heat_of_vaporization(ta_mean_c)
+        
+        # saturation vapor pressure in kPa
+        es = Lib.saturation_vapor_pressure(ta_mean_c)
+        
+        # actual vapor pressure in kPa
+        ea = Lib.actual_vapor_pressure(es, rh_mean)
+        
+        epsilon_net = 0.34 - (0.14 * math.sqrt(ea))
+        
+        # slope of the vapor pressure curve in kPa/K
+        delta = Lib.slope_of_saturation_vapor_pressure(ta_mean_c)
+        
+        # psychrometric constant in kPa/K
+        gamma = Lib.psychrometric_constant(elevation, ta_mean_c)
+        
+        # Calculate extraterrestrial radiation
+        ra = Lib.extraterrestrial_radiation(lat, doy)
+        
+        # Calculate net solar shortwave radiation 
+        rns = (1 - Lib.ALBEDO) * rs_daily
+        
+        # Rso
+        rso = Lib.rso(ra, elevation)
+        
+        # cloudness factor
+        f = Lib.cloudness_factor(rs_daily, rso)
+        
+        rnl = f * epsilon_net * Lib.stephan_boltzmann(ta_mean_c)
+      
+        rn = (0.77 * rns) - rnl
+        
+        
+        crop_dependent_factor = 37
+        if rn > 0:
+            # Bulk surface resistance and aerodynamic resistance coefficient
+            CD = 0.24 
+        else:
+            # Bulk surface resistance and aerodynamic resistance coefficient
+            CD = 0.96 
+        
+        # decompose et0 to two terms to facilitate the calculation
+        
+        radiation = delta * (rn - G)
+        
+        denominator = delta + (gamma * (1 + (CD * ws_mean)))
+        
+        radiation_term =(radiation) / (denominator * lambda_heat)
+        
+        # Aerodynamic Term
+        aerodynamic_term = (gamma * ((crop_dependent_factor) / (ta_mean_k)) * ws_mean * (es - ea)) / denominator
         
         
         et0 = radiation_term + aerodynamic_term
