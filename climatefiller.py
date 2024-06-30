@@ -1,4 +1,3 @@
-from data_science_toolkit.gis import GIS
 from data_science_toolkit.dataframe import DataFrame
 import datetime
 import os
@@ -7,7 +6,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.ensemble import IsolationForest
-from quantilesdetector import PercentileDetection
 from lib import Lib
 import ee
 import geemap
@@ -979,7 +977,6 @@ class ClimateFiller():
         
         
         data_temp = DataFrame() 
-        self.data.transform_column(rs_column_name, lambda o: o if o > 0 else 0)
         
         if freq == 'd':
             data_temp.add_column('ta_mean', self.data.resample_timeseries(in_place=False)[ta_column_name])
@@ -996,18 +993,14 @@ class ClimateFiller():
                 data_temp.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[rh_column_name])
                 data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
                 data_temp.add_column('ws_mean', self.data.resample_timeseries(in_place=False)[ws_column_name])
-                self.data.show()
-                self.watt_to_megaj_per_hour(rs_column_name)
-                data_temp.show()
-                self.data.show()
-                data_temp.add_column('rs_daily', self.data.resample_timeseries(agg='sum', in_place=False)[rs_column_name])
+                data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
                 
                 if self.elevation is None:
                     data_temp.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
                 else:
                     data_temp.add_one_value_column('elevation', self.elevation)
                 
-                data_temp.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith_daily_v1(row))
+                data_temp.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith_daily_v3(row))
             
             elif method == 'hs':
                 data_temp.add_column_based_on_function('et0_hs', lambda row: Lib.et0_hargreaves_samani(row))
@@ -1051,6 +1044,7 @@ class ClimateFiller():
                 
         elif freq == 'h':
             self.et0_output_data.dataframe = self.data.dataframe.copy()
+            self.et0_output_data.transform_column(rs_column_name, lambda o: o if o > 0 else 0)
             self.et0_output_data.index_to_column()
             self.et0_output_data.add_doy_column(datetime_column_name=self.datetime_column_name)
             self.et0_output_data.add_hod_column(datetime_column_name=self.datetime_column_name)
@@ -1076,6 +1070,8 @@ class ClimateFiller():
                     reference_crop
                     ))
                 self.et0_output_data.transform_column('et0_pm', lambda o: o if o > 0 else 0)
+                self.et0_output_data.transform_column('et0_pm', lambda o: round(o, 2))
+                
             
             elif method == 'pt':
                 self.et0_output_data.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor(
@@ -1092,7 +1088,8 @@ class ClimateFiller():
                 self.et0_output_data.add_column_based_on_function('et0_tu', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
             elif method == 'sd':
                 self.et0_output_data.add_column_based_on_function('et0_sd', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
-        
+
+            
         return self.et0_output_data.get_dataframe()
     
     def apply_quality_control_criteria(self, variable_column_name, decision_func=lambda x:x>0):
