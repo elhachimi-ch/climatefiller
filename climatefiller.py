@@ -27,7 +27,7 @@ class ClimateFiller():
     
     def __init__(self, data_link=None, data_type='csv', datetime_column_name='datetime', 
                  datetime_format='%Y-%m-%d %H:%M:%S', backend='gee', 
-                 lat=31.65410805, lon=-7.603140831, standard_meridian=0, elevation=None, **kwargs):
+                 lat=31.65410805, lon=-7.603140831, tz_offset=-7, elevation=None, **kwargs):
         """
         Initializes an instance of the class with the specified parameters.
 
@@ -37,7 +37,7 @@ class ClimateFiller():
             data_type (str): The type of the data source. Defaults to 'csv'.
             datetime_column_name (str): The name of the column that contains datetime information. Defaults to 'datetime'.
             date_time_format (str): The format of the datetime values in the data source. Defaults to '%Y-%m-%d %H:%M:%S'.
-
+            tz_offset (int): The time zone offset in hours comparint to GMT. Defaults to -7.
         Returns:
             None
 
@@ -52,7 +52,7 @@ class ClimateFiller():
         self.datetime_column_name = datetime_column_name
         self.lat = lat
         self.lon = lon
-        self.standard_meridian = standard_meridian
+        self.tz_offset = tz_offset
         self.elevation = elevation
         self.backend = backend
         self.et0_output_data = DataFrame()
@@ -1048,6 +1048,7 @@ class ClimateFiller():
             self.et0_output_data.index_to_column()
             self.et0_output_data.add_doy_column(datetime_column_name=self.datetime_column_name)
             self.et0_output_data.add_hod_column(datetime_column_name=self.datetime_column_name)
+            self.et0_output_data.transform_column('hod', lambda o: o + 1)
             self.et0_output_data.reindex_dataframe(self.datetime_column_name)
             
             if self.elevation is None:
@@ -1066,7 +1067,7 @@ class ClimateFiller():
                     rs_column_name,
                     rh_column_name,
                     ws_column_name,
-                    self.standard_meridian,
+                    self.tz_offset,
                     reference_crop
                     ))
                 self.et0_output_data.transform_column('et0_pm', lambda o: o if o > 0 else 0)

@@ -1,18 +1,17 @@
-import csv
-import pickle
-import re
 from os import listdir
 from os.path import isfile, join
 from time import sleep
 from math import sqrt
-import numpy as np 
 #from stringdist.pystringdist.levenshtein import levenshtein as ed
-import calendar
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
 import math
 import requests
 from sklearn.metrics import mean_squared_error, r2_score, median_absolute_error, mean_squared_log_error, mean_absolute_error, classification_report
+from datetime import datetime
+import pytz
+import geocoder
+
 
 class Lib:
     
@@ -198,7 +197,7 @@ class Lib:
         rs_column_name,
         rh_column_name,
         ws_column_name,
-        standard_meridian,
+        tz_offset,
         reference_crop,
         ):
         # input variables
@@ -231,7 +230,7 @@ class Lib:
         gamma = Lib.psychrometric_constant(elevation, ta_c)
         
         # Calculate extraterrestrial radiation
-        ra = Lib.extraterrestrial_radiation_hourly(doy, lat, lon, hod, Lib.standard_meridian(lon))
+        ra = Lib.extraterrestrial_radiation_hourly_v3(doy, lat, lon, hod, tz_offset)
         #ra = 1
         
         # Calculate net solar shortwave radiation 
@@ -559,8 +558,8 @@ class Lib:
         """
         
         if theta > 10:
-            #kt = rs / rso if rso > 0 else 0  # Avoid division by zero
-            kt = rs / rso
+            kt = rs / rso if rso > 0 else 0  # Avoid division by zero
+            #kt = rs / rso
             f = (1.35 * kt) - 0.35
         
         elif theta <= 10:
@@ -729,7 +728,7 @@ class Lib:
         return delta
     
     @staticmethod
-    def extraterrestrial_radiation_hourly_v2(doy, latitude, longitude, hod):
+    def extraterrestrial_radiation_hourly_v3(doy, lat, lon, hod, tz_offset):
         """
         Calculate hourly extraterrestrial radiation (Ra) using Duffie and Beckman's approach and G_sc in MJ/m²/min.
         
@@ -744,23 +743,84 @@ class Lib:
         - Ra_h: float, hourly extraterrestrial radiation in MJ/m^2
         """
         # Convert latitude and longitude from degrees to radians
-        latitude_rad = math.radians(latitude)
+        latitude_rad = math.radians(lat)
         
         # Solar declination in radians
         delta = Lib.solar_declination(doy)
         
         # Adjust local time to solar time
-        omega = Lib.solar_time_angle_at_midpoint(hod, longitude, Lib.standard_meridian(longitude), Lib.equation_of_time(doy))
-        #omega = 1
+        half_hour_before_solar_time = hod - 0.5 
+        omega = Lib.solar_time_angle(Lib.solar_time(half_hour_before_solar_time, lat, lon, doy, tz_offset))
         
         # Calculate solar time angles at the start and end of the hour
         omega_1 = omega - (0.5 * (Lib.PI/12))
         omega_2 = omega + (0.5 * (Lib.PI/12))
         
-        # Hourly extraterrestrial radiation calculation
-        Ra_h = ((12 * 60) / Lib.PI) * Lib.SOLAR_CONSTANT_MJ_MIN * Lib.inverse_relative_distance_factor(doy) * ((omega_2 - omega_1) * math.sin(latitude_rad) * math.sin(delta) + math.cos(latitude_rad) * math.cos(delta) * (math.sin(omega_2) - math.sin(omega_1)))
         
-        return Ra_h
+        # Hourly extraterrestrial radiation calculation
+        ra_h = ((12 * 60) / Lib.PI) * Lib.SOLAR_CONSTANT_MJ_MIN * Lib.inverse_relative_distance_factor(doy) * ((omega_2 - omega_1) * math.sin(latitude_rad) * math.sin(delta) + math.cos(latitude_rad) * math.cos(delta) * (math.sin(omega_2) - math.sin(omega_1)))
+        
+        return ra_h
+    
+    @staticmethod
+    def time_zone_offset_current_location():
+        local_time = datetime.now(pytz.timezone('UTC'))
+        local_time = local_time.astimezone()  # Converts to local time zone
+        offset = local_time.utcoffset().total_seconds() / 3600
+        return offset
+    
+    def time_zone_offset(lat, lon):
+       # Replace '<USERNAME>' with your GeoNames username
+        username = 'elhachimi.ch'
+        
+        print(geocoder.location(location=f"{lat}+{lon}"))
+        print('okkkkkkkkkkkkkk')
+        # Fetch geonames details using the coordinates
+        g = geocoder.geonames([lat, lon], key=username, method='findNearby')
+
+        # Check if the geocode request was successful
+        if g.ok:
+            geoname_id = g.geonames_id
+            print(f"GeoName ID for coordinates ({lat}, {lon}): {geoname_id}")
+        else:
+            print("Failed to retrieve GeoName ID for coordinates")
+
+        # Fetch detailed information using the GeoNames ID
+        g = geocoder.geonames(geoname_id, method='details', key=username)
+
+        # Extract relevant information
+        if g.ok:
+            timezone_id = g.json.get('timezone', {}).get('timeZoneId')
+            raw_offset = g.json.get('timezone', {}).get('rawOffset')
+            dst_offset = g.json.get('timezone', {}).get('dstOffset')
+
+            print(f"TimeZone ID: {timezone_id}")
+            print(f"Raw Offset: {raw_offset} hours")
+            print(f"DST Offset: {dst_offset} hours")
+        else:
+            print("Failed to retrieve data")
+    
+    @staticmethod
+    def standard_meridian(time_zone_offset):
+        return 15 * time_zone_offset
+
+    @staticmethod
+    def solar_time(hod, lat, lon, doy, tz_offset):
+        eot = Lib.equation_of_time(doy)
+        solar_time = hod + (eot + 4 * (lon - Lib.standard_meridian(tz_offset))) / 60
+        return solar_time
+    
+    def solar_time_angle(solar_time):
+        """_summary_
+
+        Args:
+            solar_time (_type_): _description_
+
+        Returns:
+            omega: the solar time angle in radians
+        """
+        # 15 = PI/12
+        return (Lib.PI * (solar_time - 12)) / 12
     
     @staticmethod
     def solar_time_angle_at_midpoint(hour, longitude, standard_meridian, equation_of_time):
@@ -781,25 +841,14 @@ class Lib:
     @staticmethod
     def equation_of_time(doy):
         # Convert the day of the year to radians (angle B)
-        B = (360 / 365) * (doy - 81)
-        B_radians = math.radians(B)
+        B = (2 * Lib.PI * (doy - 81)) / 365 
 
         # Calculate the equation of time in minutes
-        eot = 9.87 * math.sin(2 * B_radians) - 7.53 * math.cos(B_radians) - 1.5 * math.sin(B_radians)
+        #eot = 9.87 * math.sin(2 * B) - 7.53 * math.cos(B) - 1.5 * math.sin(B)
+        eot = 0.1645 * math.sin(2 * B) - 0.1255 * math.cos(B) - 0.025 * math.sin(B)
 
         return eot
-    
-    
-    @staticmethod
-    def standard_meridian(longitude):
-        # Calculate the time zone offset from UTC
-        time_zone_offset = round(longitude / 15.0)
         
-        # Calculate the standard meridian for the time zone
-        standard_meridian = 15 * time_zone_offset
-        
-        return standard_meridian
-    
     @staticmethod
     def extraterrestrial_radiation_hourly(doy, latitude, longitude, hod, standard_meridian):
         """
@@ -826,8 +875,9 @@ class Lib:
         #B = math.radians(B)
         EOT = 0.1645 * math.sin(2 * B) - 0.1255 * math.cos(B) - 0.025 * math.sin(B)
         
+        standard_meridian = -120
         # Adjust local time to solar time
-        omega = (Lib.PI/12) * (((hod - 0.5) - ((4/60) * (longitude - standard_meridian) + EOT)) - 12 )
+        omega = (Lib.PI/12) * (((hod - 0.5) - ((4/60) * (longitude - standard_meridian) + EOT)) - 12)
         #omega = 5
         
         # Calculate solar time angles at the start and end of the hour
@@ -841,7 +891,6 @@ class Lib:
         ra_h = ((12 * 60 * Lib.SOLAR_CONSTANT_MJ_MIN * Lib.inverse_relative_distance_factor(doy)) / Lib.PI) * ra_second_term
         
         return ra_h
-    
     
     def extraterrestrial_radiation_hourly_v2(doy, latitude, longitude, hod, standard_meridian):
         """
@@ -932,7 +981,6 @@ class Lib:
         
         return ra
     
-    
     @staticmethod
     def et0_priestley_taylor_daily_v1(row):
         # input variables
@@ -993,7 +1041,6 @@ class Lib:
             
         # output result
         return et0
-    
     
     @staticmethod
     def et0_priestley_taylor_daily_v2(row):
