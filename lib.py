@@ -11,6 +11,7 @@ from sklearn.metrics import mean_squared_error, r2_score, median_absolute_error,
 from datetime import datetime
 import pytz
 import geocoder
+import numpy as np
 
 
 class Lib:
@@ -117,7 +118,7 @@ class Lib:
         return et0
     
     @staticmethod
-    def et0_penman_monteith_daily_v1(row):
+    def et0_penman_monteith_daily(row):
         # input variables
         # T = 25.0  # air temperature in degrees Celsius
         # RH = 60.0  # relative humidity in percent
@@ -125,12 +126,14 @@ class Lib:
         # Rs = 15.0  # incoming solar radiation in MJ/m2/day
         # lat = 35.0  # latitude in degrees
         
-        ta_max, ta_min, rh_max, rh_min, u2_mean, rs_daily, lat, elevation, doy =  row['ta_max'], row['ta_min'], row['rh_max'], row['rh_min'], row['ws_mean'], row['rs_daily'], row['lat'], row['elevation'], row['doy']
+        ta_max, ta_min, rh_max, rh_min, u2_mean, rs_mean, lat, elevation, doy =  row['ta_max'], row['ta_min'], row['rh_max'], row['rh_min'], row['ws_mean'], row['rs_mean'], row['lat'], row['elevation'], row['doy']
         
         # constants
         ALBEDO = 0.23  # Albedo coefficient for grass reference surface
         SIGMA = 0.000000004903  # Stefan-Boltzmann constant in MJ/K4/m2/day
         G = 0  # Soil heat flux density (MJ/m2/day)
+        
+        rs_mean *= 0.0864  # convert watts per square meter to megajoules per square meter 0.0288 = 60x60x8hours or 0.0864 for 24 hours
 
         ta_mean = (ta_max + ta_min) / 2
         ta_max_kelvin = ta_max + 273.16  # air temperature in Kelvin
@@ -161,17 +164,17 @@ class Lib:
         u2 = u2_mean
         
         # Calculate extraterrestrial radiation
-        ra = Lib.extraterrestrial_radiation(lat, doy)
+        ra = Lib.extraterrestrial_radiation_daily(lat, doy)
         
         # Calculate clear sky solar radiation
         rso = (0.75 + (2e-5 * elevation)) * ra
         
         # Calculate net solar shortwave radiation 
-        rns = (1 - ALBEDO) * rs_daily
+        rns = (1 - ALBEDO) * rs_mean
         
         # Calculate net longwave radiation
         
-        rnl = SIGMA * (((math.pow(ta_max_kelvin, 4) + math.pow(ta_min_kelvin, 4)) / 2) * (0.34 - (0.14 * math.sqrt(ea))) * ((1.35 * (rs_daily / rso)) - 0.35))
+        rnl = SIGMA * (((math.pow(ta_max_kelvin, 4) + math.pow(ta_min_kelvin, 4)) / 2) * (0.34 - (0.14 * math.sqrt(ea))) * ((1.35 * (rs_mean / rso)) - 0.35))
         
         # Calculate net radiation
         rn = rns - rnl
@@ -184,8 +187,10 @@ class Lib:
         tt = ((900) / (ta_mean + 273) ) * u2
         wind_term = pt * tt * (es - ea)
         et0 = radiation_term + wind_term """
+        CD = 0.34
+        CN = 900
         
-        et0 = ((0.408 * delta * (rn - G)) + gamma * (((900 * u2 * (es - ea)) / (ta_mean + 273)))) / (delta + (gamma * (1 + (0.34 * u2))))
+        et0 = ((0.408 * delta * (rn - G)) + gamma * (((CN * u2 * (es - ea)) / (ta_mean + 273)))) / (delta + (gamma * (1 + (CD * u2))))
 
         # output result
         return et0
@@ -952,7 +957,7 @@ class Lib:
         return declination_radians
   
     @staticmethod
-    def extraterrestrial_radiation(lat, doy):
+    def extraterrestrial_radiation_daily(lat, doy):
         """
         Calculate extraterrestrial radiation (Ra) for a given latitude and day of the year.
 
@@ -964,22 +969,41 @@ class Lib:
         float: Extraterrestrial radiation in MJ/m^2/day.
         """
         
-        # Convert latitude to radians
-        latitude = math.radians(lat)
+        lat_rad = math.radians(lat)
         
         # Calculate the inverse relative distance Earth-Sun (dr)
-        dr = 1 + (0.033 * math.cos((2 * math.pi * doy) / 365))
+        dr = Lib.inverse_relative_distance_factor(doy)
         
         # Calculate the solar declination (δ):
-        delta = 0.409 * math.sin(((2 * math.pi * doy) / 365) - 1.39)
+        delta = Lib.solar_declination(doy)
         
         # Calculate the sunset hour angle
-        ws = math.acos(-math.tan(latitude) * math.tan(delta))
+        omega = Lib.sunset_hour_angle(lat, delta)
         
         # Calculate the extraterrestrial radiation
-        ra = ((24 * 60) / math.pi) * Lib.SOLAR_CONSTANT * dr * ((ws * math.sin(latitude) * math.sin(delta)) + (math.cos(latitude) * math.cos(delta) * math.sin(ws)))
+        ra = ((24 * 60) / math.pi) * Lib.SOLAR_CONSTANT_MJ_MIN * dr * ((omega * math.sin(lat_rad) * math.sin(delta)) + (math.cos(lat_rad) * math.cos(delta) * math.sin(omega)))
         
         return ra
+    
+    @staticmethod
+    def sunset_hour_angle(lat, declination):
+        """
+        Calculate the sunset hour angle in radians.
+
+        Parameters:
+        latitude (float): Latitude in decimal degrees.
+        declination (float): Solar declination in radians.
+
+        Returns:
+        float: Sunset hour angle in radians.
+        """
+        # Convert latitude to radians
+        lat_rad = math.radians(lat)
+        
+        # Calculate the sunset hour angle using the formula
+        omega = np.arccos(-np.tan(lat_rad) * np.tan(declination))
+        
+        return omega
     
     @staticmethod
     def et0_priestley_taylor_daily_v1(row):

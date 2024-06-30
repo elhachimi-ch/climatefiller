@@ -986,6 +986,7 @@ class ClimateFiller():
             data_temp.index_to_column()
             data_temp.add_doy_column(datetime_column_name=self.datetime_column_name)
             data_temp.add_one_value_column('lat', self.lat)
+            data_temp.add_one_value_column('lon', self.lon)
             data_temp.reindex_dataframe(self.datetime_column_name)
             
             if method == 'pm':
@@ -1000,7 +1001,7 @@ class ClimateFiller():
                 else:
                     data_temp.add_one_value_column('elevation', self.elevation)
                 
-                data_temp.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith_daily_v3(row))
+                data_temp.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith_daily(row))
             
             elif method == 'hs':
                 data_temp.add_column_based_on_function('et0_hs', lambda row: Lib.et0_hargreaves_samani(row))
@@ -1057,7 +1058,7 @@ class ClimateFiller():
                 self.et0_output_data.add_one_value_column('elevation', self.elevation)
                 
             self.et0_output_data.add_one_value_column('lat', self.lat)
-            self.et0_output_data.add_one_value_column('lon', self.lat)
+            self.et0_output_data.add_one_value_column('lon', self.lon)
             
             
             if method == 'pm':
