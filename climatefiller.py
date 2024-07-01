@@ -937,6 +937,18 @@ class ClimateFiller():
         """
         self.data.get_column(column).plot()
         plt.show()
+        
+    def extraterrestrial_radiation_daily(self, column_name='ra'):
+        self.data.index_to_column()
+        self.data.add_doy_column(datetime_column_name=self.datetime_column_name)
+        self.data.add_one_value_column('lat', self.lat)
+        self.data.add_column_based_on_function(
+            column_name, 
+            lambda row: Lib.extraterrestrial_radiation_daily(
+                    row['lat'],
+                    row['doy'])
+        )
+        self.data.reindex_dataframe(self.datetime_column_name)
     
     def et0_estimation(self, 
                        ta_column_name='ta',
@@ -1092,7 +1104,7 @@ class ClimateFiller():
                     ta_column_name,
                     rs_column_name,
                     rh_column_name,
-                    self.standard_meridian, reference_crop))
+                    reference_crop))
                 self.et0_output_data.transform_column('et0_pt', lambda o: o if o > 0 else 0)
                 
             elif method == 'ab':
@@ -1449,6 +1461,32 @@ class ClimateFiller():
                                 else:
                                     self.data.join(data.get_dataframe())
 
+                else:
+                    
+                    # era5_land_variables = ['temperature_2m', 'dewpoint_temperature_2m']
+                    era5_land_variables = variable
+                    
+                    output_file = 'data/era5_land_' + '_'.join(variable + [str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
+                    if os.path.exists(output_file):
+                        print(f"Time series already downloaded on: {output_file}")
+                    else:
+                        self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
+                        
+                        for year in range(start_date.year, end_date.year + 1):
+                            cache_path = 'data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
+                            temp_data = DataFrame(cache_path)
+                            data.append_dataframe(temp_data.get_dataframe())
+                            
+                        
+                        output_file = 'data/era5_land_' + '_'.join(variable + [str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
+                        data.column_to_date('datetime')
+                        data.reindex_dataframe('datetime')
+                        end_date += timedelta(1)
+                        data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
+                        data.export(output_file, index=True)
+                        
+        
+                
             else:
                 output_file = 'data/ta_' + '_'.join([str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
                 if os.path.exists(output_file):
