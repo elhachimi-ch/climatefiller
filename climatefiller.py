@@ -1002,11 +1002,18 @@ class ClimateFiller():
                     data_temp.add_one_value_column('elevation', self.elevation)
                 
                 data_temp.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith_daily(row))
+                data_temp.transform_column('et0_pm', lambda o: o if o > 0 else 0)
+                data_temp.transform_column('et0_pm', lambda o: round(o, 2))
             
             elif method == 'hs':
                 data_temp.add_column_based_on_function('et0_hs', lambda row: Lib.et0_hargreaves_samani(row))
+                data_temp.transform_column('et0_hs', lambda o: o if o > 0 else 0)
+                data_temp.transform_column('et0_hs', lambda o: round(o, 2))
            
             elif method == 'pt':
+                data_temp.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[rh_column_name])
+                data_temp.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[rh_column_name])
+                data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
                 data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
                 
@@ -1017,7 +1024,9 @@ class ClimateFiller():
                 
                 data_temp.add_one_value_column('lat', self.lat)
                 
-                data_temp.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily_v1(row))
+                data_temp.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily(row))
+                data_temp.transform_column('et0_pt', lambda o: o if o > 0 else 0)
+                data_temp.transform_column('et0_pt', lambda o: round(o, 2))
                 
                 
             elif method == 'sd':
@@ -1040,6 +1049,8 @@ class ClimateFiller():
                     data_temp.add_one_value_column('elevation', self.elevation)
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
                 data_temp.add_column_based_on_function('et0_mk', Lib.et0_makkink)
+                data_temp.transform_column('et0_mk', lambda o: o if o > 0 else 0)
+                data_temp.transform_column('et0_mk', lambda o: round(o, 2))
             
             self.et0_output_data.set_dataframe(data_temp.get_dataframe())
                 
