@@ -938,7 +938,7 @@ class ClimateFiller():
         self.data.get_column(column).plot()
         plt.show()
         
-    def extraterrestrial_radiation_daily(self, column_name='ra'):
+    def extraterrestrial_radiation_daily(self, column_name='ra', nbr_decimal_places=None):
         self.data.index_to_column()
         self.data.add_doy_column(datetime_column_name=self.datetime_column_name)
         self.data.add_one_value_column('lat', self.lat)
@@ -948,6 +948,8 @@ class ClimateFiller():
                     row['lat'],
                     row['doy'])
         )
+        if nbr_decimal_places is not None:
+            self.data.transform_column(column_name, lambda o: round(o, nbr_decimal_places))
         self.data.reindex_dataframe(self.datetime_column_name)
     
     def et0_estimation(self, 
@@ -957,7 +959,8 @@ class ClimateFiller():
                        ws_column_name='ws',
                        method='pm',
                        freq='d',
-                       reference_crop='grass'
+                       reference_crop='grass',
+                       nbr_decimal_places=2
                        ):
         """
         Estimates reference evapotranspiration (ET0) using the specified meteorological data and method.
@@ -1015,13 +1018,13 @@ class ClimateFiller():
                 
                 data_temp.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith_daily(row))
                 data_temp.transform_column('et0_pm', lambda o: o if o > 0 else 0)
-                data_temp.transform_column('et0_pm', lambda o: round(o, 2))
+                data_temp.transform_column('et0_pm', lambda o: round(o, nbr_decimal_places))
             
             elif method == 'hs':
                 data_temp.add_column_based_on_function('et0_hs', lambda row: Lib.et0_hargreaves_samani(row))
                 data_temp.transform_column('et0_hs', lambda o: o if o > 0 else 0)
-                data_temp.transform_column('et0_hs', lambda o: round(o, 2))
-           
+                data_temp.transform_column('et0_hs', lambda o: round(o, nbr_decimal_places))
+
             elif method == 'pt':
                 data_temp.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[rh_column_name])
                 data_temp.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[rh_column_name])
@@ -1038,7 +1041,7 @@ class ClimateFiller():
                 
                 data_temp.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily(row))
                 data_temp.transform_column('et0_pt', lambda o: o if o > 0 else 0)
-                data_temp.transform_column('et0_pt', lambda o: round(o, 2))
+                data_temp.transform_column('et0_pt', lambda o: round(o, nbr_decimal_places))
                 
                 
             elif method == 'sd':
@@ -1048,6 +1051,7 @@ class ClimateFiller():
             elif method == 'ab':
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
                 data_temp.add_column_based_on_function('et0_ab', Lib.et0_abtew)
+                data_temp.transform_column('et0_ab', lambda o: round(o, nbr_decimal_places))
                 
             elif method == 'tu':
                 data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
@@ -1062,7 +1066,7 @@ class ClimateFiller():
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
                 data_temp.add_column_based_on_function('et0_mk', Lib.et0_makkink)
                 data_temp.transform_column('et0_mk', lambda o: o if o > 0 else 0)
-                data_temp.transform_column('et0_mk', lambda o: round(o, 2))
+                data_temp.transform_column('et0_mk', lambda o: round(o, nbr_decimal_places))
             
             self.et0_output_data.set_dataframe(data_temp.get_dataframe())
                 
