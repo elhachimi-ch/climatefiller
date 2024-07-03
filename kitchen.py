@@ -144,7 +144,7 @@ def main():
     # Manually create the initial trial with specific values
     #initial_trial = {'alpha': 1.26}  # Specify your initial values here
     initial_trial = {'c': 0.0023, 'a': 17.8, 'b': 0.5}  # Specify your initial values here
-    initial_trial = {'c': 0.003476881278035174, 'a': 11.418468911007675, 'b': 0.39083457647316755}  # Specify your initial values here
+    #initial_trial = {'c': 0.003476881278035174, 'a': 11.418468911007675, 'b': 0.39083457647316755}  # Specify your initial values here
     study.enqueue_trial(initial_trial)  # Enqueue the initial trial
 
     # Run the optimization
@@ -181,12 +181,12 @@ def main():
     
     print('Comparison: ', data.similarity_measure('et0_pm', 'predictions', 'ts'))
     # Plot the observed vs fitted values
-    plt.scatter(data.get_column('et0_pm'), data.get_column('predictions'))
+    """plt.scatter(data.get_column('et0_pm'), data.get_column('predictions'))
     plt.xlabel('Observed ET')
     plt.ylabel('Fitted ET')
     plt.title('Observed vs Fitted ET')
     plt.plot([min(data.get_column('et0_pm')), max(data.get_column('et0_pm'))], [min(data.get_column('et0_pm')), max(data.get_column('et0_pm'))], 'r--')
-    plt.show()
+    plt.show()"""
 
     
    
