@@ -507,7 +507,7 @@ class Lib:
         
         """
         # Calculate saturation vapor pressure (es) using Magnus-Tetens formula
-        es = 0.6108 * math.exp((17.27 * ta_c) / (ta_c + 237.3))
+        es = 0.6108 * np.exp((17.27 * ta_c) / (ta_c + 237.3))
         return es
     
     @staticmethod
@@ -605,7 +605,7 @@ class Lib:
         Description:
         This function uses the cosine function to calculate the Earth-Sun distance variation effect.
         """
-        return 1 + (0.033 * math.cos((2 * Lib.PI * doy) / 365))
+        return 1 + (0.033 * np.cos((2 * Lib.PI * doy) / 365))
     
     @staticmethod
     def net_longwave_radiation(ta_c, rh, rs, rso, epsilon=0.95):
@@ -948,7 +948,7 @@ class Lib:
         - declination: float, solar declination in radians
         """
         # Convert day of the year to radians within the sine function
-        declination_radians = 0.409 * math.sin(((2 * Lib.PI * doy) / 365) - 1.39)
+        declination_radians = 0.409 * np.sin(((2 * Lib.PI * doy) / 365) - 1.39)
 
         return declination_radians
   
@@ -965,7 +965,7 @@ class Lib:
         float: Extraterrestrial radiation in MJ/m^2/day.
         """
         
-        lat_rad = math.radians(lat)
+        lat_rad = np.radians(lat)
         
         # Calculate the inverse relative distance Earth-Sun (dr)
         dr = Lib.inverse_relative_distance_factor(doy)
@@ -977,7 +977,7 @@ class Lib:
         omega = Lib.sunset_hour_angle(lat, delta)
         
         # Calculate the extraterrestrial radiation
-        ra = ((24 * 60) / math.pi) * Lib.SOLAR_CONSTANT_MJ_MIN * dr * ((omega * math.sin(lat_rad) * math.sin(delta)) + (math.cos(lat_rad) * math.cos(delta) * math.sin(omega)))
+        ra = ((24 * 60) / math.pi) * Lib.SOLAR_CONSTANT_MJ_MIN * dr * ((omega * np.sin(lat_rad) * np.sin(delta)) + (np.cos(lat_rad) * np.cos(delta) * np.sin(omega)))
         
         return ra
     
@@ -994,7 +994,7 @@ class Lib:
         float: Sunset hour angle in radians.
         """
         # Convert latitude to radians
-        lat_rad = math.radians(lat)
+        lat_rad = np.radians(lat)
         
         # Calculate the sunset hour angle using the formula
         omega = np.arccos(-np.tan(lat_rad) * np.tan(declination))

@@ -1030,7 +1030,6 @@ class ClimateFiller():
                 data_temp.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[rh_column_name])
                 data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
-                data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
                 
                 if self.elevation is None:
                     data_temp.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
