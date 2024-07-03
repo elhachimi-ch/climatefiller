@@ -139,7 +139,7 @@ def main():
     pruner = MedianPruner()
     
     # Create a study object
-    study = optuna.create_study(direction='minimize')
+    study = optuna.create_study(direction='minimize', sampler=sampler, pruner=pruner)
     
     # Manually create the initial trial with specific values
     #initial_trial = {'alpha': 1.26}  # Specify your initial values here
