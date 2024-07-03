@@ -132,7 +132,7 @@ def objective(trial, data):
 def main():
     ti = time.time()
     
-    data = DataFrame("data/armed_full_p_et0_bc.csv")
+    data = DataFrame("data/r3_full_p_et0_bc.csv")
     
     # Create a study with CMA-ES sampler and Hyperband pruner
     sampler = CmaEsSampler()
@@ -143,8 +143,6 @@ def main():
     
     # Manually create the initial trial with specific values
     #initial_trial = {'alpha': 1.26}  # Specify your initial values here
-    #initial_trial = {'c': 0.0023, 'a': 17.8, 'b': 0.5}  # Specify your initial values here
-    #initial_trial = {'c': 0.003476881278035174, 'a': 11.418468911007675, 'b': 0.39083457647316755}  # Specify your initial values here
     initial_trial = {'c': 0.0023, 'a': 17.8, 'b': 0.5}  # Specify your initial values here
     study.enqueue_trial(initial_trial)  # Enqueue the initial trial
 
