@@ -126,8 +126,7 @@ def objective(trial, data):
     
     data.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily(row, alpha))
     #data.add_column_based_on_function('et0_hs', lambda row: Lib.et0_hargreaves_samani(row, c, a, b))
-    rmse = data.similarity_measure('et0_pm', 'et0_hs', 'ts')['RMSE']
-    return rmse
+    rmse = data.similarity_measure('et0_pm', 'et0_pt', 'ts')['RMSE']
 
 def main():
     ti = time.time()
