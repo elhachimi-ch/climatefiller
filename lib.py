@@ -1169,7 +1169,7 @@ class Lib:
         return et0
     
     @staticmethod
-    def et0_abtew(row):
+    def et0_abtew(row, k1=0.53):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -1188,9 +1188,8 @@ class Lib:
         
         rs_mean *= 0.0864  # convert watts per square meter to megajoules per square meter 0.0288 = 60x60x8hours or 0.0864 for 24 hours
         
-        
         lambda_v = Lib.LATENT_HEAT_OF_VAPORIZATION
-        K1 = 0.53
+        K1 = k1
         
         
         et0 = (K1 * rs_mean) / lambda_v
