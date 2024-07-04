@@ -154,7 +154,7 @@ def main():
     print("Best value: ", study.best_value)
     
     # PT
-    #alpha = study.best_params['alpha']
+    alpha = study.best_params['alpha']
     
     
     # MK
@@ -162,15 +162,15 @@ def main():
     # AB
 
     # HS
-    c = study.best_params['c']
+    """c = study.best_params['c']
     a = study.best_params['a']
-    b = study.best_params['b']
+    b = study.best_params['b']"""
 
     # Calculate the fitted ET values HS
-    data.add_column_based_on_function('predictions', lambda row: Lib.et0_hargreaves_samani(row, c=c, a=a, b=b))
+    #data.add_column_based_on_function('predictions', lambda row: Lib.et0_hargreaves_samani(row, c=c, a=a, b=b))
     
     # Calculate the fitted ET values PT
-    #data.add_column_based_on_function('predictions', lambda row: Lib.et0_priestley_taylor_daily(row, alpha=alpha))
+    data.add_column_based_on_function('predictions', lambda row: Lib.et0_priestley_taylor_daily(row, alpha=alpha))
     
     # Calculate the fitted ET values MK
     #et0_fitted = et0_makkink(data_x.T, c1, c2)
