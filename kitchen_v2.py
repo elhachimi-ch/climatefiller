@@ -118,14 +118,14 @@ def objective(trial, data):
     
     # Define the search space for the constants a and b
     # PT
-    #alpha = trial.suggest_float('alpha', 0, 10, step=0.0001)
+    alpha = trial.suggest_float('alpha', 0, 10, step=0.0001)
     # HS
-    c = trial.suggest_float('c', 0, 1, step=0.0001)
-    a = trial.suggest_float('a', 0, 50, step=0.1)
-    b = trial.suggest_float('b', 0, 1, step=0.01)
+    #c = trial.suggest_float('c', 0, 1, step=0.0001)
+    #a = trial.suggest_float('a', 0, 50, step=0.1)
+    #b = trial.suggest_float('b', 0, 1, step=0.01)
     
-    #data.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily(row, alpha))
-    data.add_column_based_on_function('et0_hs', lambda row: Lib.et0_hargreaves_samani(row, c, a, b))
+    data.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily(row, alpha))
+    #data.add_column_based_on_function('et0_hs', lambda row: Lib.et0_hargreaves_samani(row, c, a, b))
     rmse = data.similarity_measure('et0_pm', 'et0_hs', 'ts')['RMSE']
     return rmse
 
@@ -136,14 +136,14 @@ def main():
     
     # Create a study with CMA-ES sampler and Hyperband pruner
     sampler = CmaEsSampler()
-    pruner = MedianPruner()
+    pruner = MedianPruner() 
     
     # Create a study object
     study = optuna.create_study(direction='minimize', sampler=sampler, pruner=pruner)
     
     # Manually create the initial trial with specific values
-    #initial_trial = {'alpha': 1.26}  # Specify your initial values here
-    initial_trial = {'c': 0.0023, 'a': 17.8, 'b': 0.5}  # Specify your initial values here
+    initial_trial = {'alpha': 1.26}  # Specify your initial values here
+    #initial_trial = {'c': 0.0023, 'a': 17.8, 'b': 0.5}  # Specify your initial values here
     study.enqueue_trial(initial_trial)  # Enqueue the initial trial
 
     # Run the optimization
