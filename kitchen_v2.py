@@ -127,7 +127,7 @@ def objective(trial, data):
     #c1 = trial.suggest_float('c1', 0, 10, step=0.01)
     #c2 = trial.suggest_float('c2', 0, 10, step=0.01)
     # K1
-    k1 = trial.suggest_float('k1', 0, 10, step=0.01)
+    k1 = trial.suggest_float('k1', 0, 10, step=0.0001)
     
     
     #data.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily(row, alpha))
