@@ -1259,7 +1259,7 @@ class Lib:
         return et0
     
     @staticmethod
-    def et0_makkink(row):
+    def et0_makkink(row, c1=0.61, c2=0.12):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -1286,5 +1286,5 @@ class Lib:
         # convert units
         rs_mean *= 0.0864  # convert watts per square meter to megajoules per square meter 0.0288 = 60x60x8hours or 0.0864 for 24 hours
         
-        et0 = ((0.61 * delta * rs_mean) / ((delta + gama) * lam)) - 0.12
+        et0 = ((c1 * delta * rs_mean) / ((delta + gama) * lam)) - c2
         return et0

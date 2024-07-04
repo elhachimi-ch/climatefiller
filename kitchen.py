@@ -118,21 +118,26 @@ def objective(trial, data):
     
     # Define the search space for the constants a and b
     # PT
-    alpha = trial.suggest_float('alpha', 0, 10, step=0.0001)
+    #alpha = trial.suggest_float('alpha', 0, 10, step=0.0001)
     # HS
     #c = trial.suggest_float('c', 0, 1, step=0.0001)
     #a = trial.suggest_float('a', 0, 50, step=0.1)
     #b = trial.suggest_float('b', 0, 1, step=0.01)
+    # MK
+    c1 = trial.suggest_float('c1', 0, 10, step=0.01)
+    c2 = trial.suggest_float('c2', 0, 10, step=0.01)
     
-    data.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily(row, alpha))
+    
+    #data.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily(row, alpha))
     #data.add_column_based_on_function('et0_hs', lambda row: Lib.et0_hargreaves_samani(row, c, a, b))
-    rmse = data.similarity_measure('et0_pm', 'et0_pt', 'ts')['RMSE']
+    data.add_column_based_on_function('et0_mk', lambda row: Lib.et0_makkink(row, c1, c2))
+    rmse = data.similarity_measure('et0_pm', 'et0_mk', 'ts')['RMSE']
     return rmse
 
 def main():
     ti = time.time()
     
-    data = DataFrame("data/armed_full_p_et0_bc.csv")
+    data = DataFrame("data/r3_full_p_et0_bc.csv")
     
     # Create a study with CMA-ES sampler and Hyperband pruner
     sampler = CmaEsSampler()
@@ -142,7 +147,8 @@ def main():
     study = optuna.create_study(direction='minimize', sampler=sampler, pruner=pruner)
     
     # Manually create the initial trial with specific values
-    initial_trial = {'alpha': 1.26}  # Specify your initial values here
+    #initial_trial = {'alpha': 1.26}  # Specify your initial values here
+    initial_trial = {'c1': 0.61, 'c2': 0.12}  # Specify your initial values here
     #initial_trial = {'c': 0.0023, 'a': 17.8, 'b': 0.5}  # Specify your initial values here
     study.enqueue_trial(initial_trial)  # Enqueue the initial trial
 
@@ -154,10 +160,10 @@ def main():
     print("Best value: ", study.best_value)
     
     # PT
-    alpha = study.best_params['alpha']
-    
+    #alpha = study.best_params['alpha']
     
     # MK
+    c1, c2 = study.best_params['c1'], study.best_params['c2']
     
     # AB
 
@@ -170,10 +176,10 @@ def main():
     #data.add_column_based_on_function('predictions', lambda row: Lib.et0_hargreaves_samani(row, c=c, a=a, b=b))
     
     # Calculate the fitted ET values PT
-    data.add_column_based_on_function('predictions', lambda row: Lib.et0_priestley_taylor_daily(row, alpha=alpha))
+    #data.add_column_based_on_function('predictions', lambda row: Lib.et0_priestley_taylor_daily(row, alpha=alpha))
     
     # Calculate the fitted ET values MK
-    #et0_fitted = et0_makkink(data_x.T, c1, c2)
+    data.add_column_based_on_function('predictions', lambda row: Lib.et0_makkink(row, c1, c2))
     
     # Calculate the fitted ET values AB
     
