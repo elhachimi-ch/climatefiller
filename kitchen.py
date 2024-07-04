@@ -132,11 +132,11 @@ def objective(trial, data):
 def main():
     ti = time.time()
     
-    data = DataFrame("data/r3_full_p_et0_bc.csv")
+    data = DataFrame("data/armed_full_p_et0_bc.csv")
     
     # Create a study with CMA-ES sampler and Hyperband pruner
     sampler = CmaEsSampler()
-    pruner = MedianPruner()
+    pruner = MedianPruner() 
     
     # Create a study object
     study = optuna.create_study(direction='minimize', sampler=sampler, pruner=pruner)
