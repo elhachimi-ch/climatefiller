@@ -140,7 +140,7 @@ def objective(trial, data):
 def main():
     ti = time.time()
     
-    data = DataFrame("data/chichaoua_full_p_et0_bc.csv")
+    data = DataFrame("data/armed_full_p_et0_bc.csv")
     
     # Create a study with CMA-ES sampler and Hyperband pruner
     sampler = CmaEsSampler()
