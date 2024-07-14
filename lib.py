@@ -41,7 +41,6 @@ class Lib:
     
     def __init__(self, *args, **kwargs):
         pass
-         
     
     @staticmethod
     def et0_penman_monteith_daily_v3(row):

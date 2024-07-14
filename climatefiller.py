@@ -960,7 +960,11 @@ class ClimateFiller():
                        method='pm',
                        freq='d',
                        reference_crop='grass',
-                       nbr_decimal_places=2
+                       nbr_decimal_places=2,
+                       c_hs=0.0023,
+                       a_hs=17.8,
+                       b_hs=0.5,
+                       k1_ab=0.53
                        ):
         """
         Estimates reference evapotranspiration (ET0) using the specified meteorological data and method.
@@ -1021,7 +1025,11 @@ class ClimateFiller():
                 data_temp.transform_column('et0_pm', lambda o: round(o, nbr_decimal_places))
             
             elif method == 'hs':
-                data_temp.add_column_based_on_function('et0_hs', lambda row: Lib.et0_hargreaves_samani(row))
+                data_temp.add_column_based_on_function('et0_hs', lambda row: Lib.et0_hargreaves_samani(
+                    row,
+                    c=c_hs,
+                    a=a_hs,
+                    b=b_hs))
                 data_temp.transform_column('et0_hs', lambda o: o if o > 0 else 0)
                 data_temp.transform_column('et0_hs', lambda o: round(o, nbr_decimal_places))
 
@@ -1049,7 +1057,7 @@ class ClimateFiller():
                 
             elif method == 'ab':
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
-                data_temp.add_column_based_on_function('et0_ab', Lib.et0_abtew)
+                data_temp.add_column_based_on_function('et0_ab', lambda row: Lib.et0_abtew(row, k1=k1_ab))
                 data_temp.transform_column('et0_ab', lambda o: round(o, nbr_decimal_places))
                 
             elif method == 'tu':
