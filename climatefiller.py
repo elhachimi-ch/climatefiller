@@ -964,7 +964,8 @@ class ClimateFiller():
                        c_hs=0.0023,
                        a_hs=17.8,
                        b_hs=0.5,
-                       k1_ab=0.53
+                       k1_ab=0.53,
+                       alpha_pt=1.26,
                        ):
         """
         Estimates reference evapotranspiration (ET0) using the specified meteorological data and method.
@@ -1046,7 +1047,7 @@ class ClimateFiller():
                 
                 data_temp.add_one_value_column('lat', self.lat)
                 
-                data_temp.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily(row))
+                data_temp.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily(row, alpha_pt))
                 data_temp.transform_column('et0_pt', lambda o: o if o > 0 else 0)
                 data_temp.transform_column('et0_pt', lambda o: round(o, nbr_decimal_places))
                 
