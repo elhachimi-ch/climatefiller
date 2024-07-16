@@ -173,7 +173,7 @@ def main():
     study.enqueue_trial(initial_trial)  # Enqueue the initial trial
 
     # Run the optimization
-    study.optimize(lambda trial: objective(trial, data_et0), n_trials=3)
+    study.optimize(lambda trial: objective(trial, data_et0), n_trials=1000)
 
      # Print the best parameters
     print("Best parameters: ", study.best_params)
