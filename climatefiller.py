@@ -1358,7 +1358,7 @@ class ClimateFiller():
                         self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
                         
                         for year in range(start_date.year, end_date.year + 1):
-                            cache_path = 'data/cache/' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
+                            cache_path = 'data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
                             temp_data = DataFrame(cache_path)
                             data.append_dataframe(temp_data.get_dataframe())
                             
@@ -1616,10 +1616,10 @@ class ClimateFiller():
         """
         self.data.export(path_link, data_type, kwargs)
         
-    def download_era5_land_data_by_years(self, variables, lon, lat, start_date, end_date):
+    def download_era5_land_data_by_years(self, variables, start_date, end_date):
         self.check_directory_existance('data')
         self.check_directory_existance('data/cache')
-        point = ee.Geometry.Point(lon, lat)
+        point = ee.Geometry.Point(self.lon, self.lat)
         era5_land = ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY').filterBounds(point)
         
         if isinstance(start_date, str) and isinstance(end_date, str):
@@ -1628,7 +1628,7 @@ class ClimateFiller():
             end_date = datetime.datetime.strptime(end_date, '%Y-%m-%d')
         
         for year in range(start_date.year, end_date.year + 1):
-            cache_path = 'data/cache/era5_land_' + '_'.join([str(s) for s in variables] + [str(lon), str(lat), str(year)]) + '.csv'
+            cache_path = 'data/cache/era5_land_' + '_'.join([str(s) for s in variables] + [str(self.lon), str(self.lat), str(year)]) + '.csv'
             
             if os.path.exists(cache_path):
                 print(f"Time series already downloaded on: {cache_path}")
