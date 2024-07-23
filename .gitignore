@@ -8,6 +8,7 @@ __pycache__/
 *.idx
 *.csv
 *.html
+*kitchen*
 **/build
 **/source
 kitchen_et0_calculation.py
