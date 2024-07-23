@@ -1286,3 +1286,63 @@ class Lib:
         
         et0 = ((c1 * delta * rs_mean) / ((delta + gama) * lam)) - c2
         return et0
+
+    @staticmethod
+    def temperature_seasonality_index(temperatures):
+        return np.std(temperatures)
+
+    @staticmethod
+    def precipitation_seasonality_index(precipitations):
+        mean_precip = np.mean(precipitations)
+        return (np.std(precipitations) / mean_precip) * 100
+
+    @staticmethod
+    def thornthwaite_moisture_index(annual_precip, annual_pet):
+        return (100 * (annual_precip - annual_pet)) / annual_pet
+
+    @staticmethod
+    def aridity_index(annual_precip, annual_pet):
+        return annual_precip / annual_pet
+
+    @staticmethod
+    def classify_koppen_geiger(temps, precips, annual_precip, annual_temp):
+        if all(temp > 18 for temp in temps):
+            if min(precips) >= 60:
+                return 'Af - Tropical Rainforest'
+            elif min(precips) < 60 and annual_precip >= 25 * (100 - (100 / (np.std(precips) / np.mean(precips)))):
+                return 'Am - Tropical Monsoon'
+            else:
+                return 'Aw - Tropical Savanna'
+        elif annual_precip < 10 * annual_temp:
+            if annual_precip < 5 * annual_temp:
+                return 'BW - Arid Desert'
+            else:
+                return 'BS - Arid Steppe'
+        elif min(temps) >= 0 and max(temps) < 18:
+            if max(temps) > 22:
+                if min(precips[3:8]) < 40:
+                    return 'Csa - Mediterranean Hot Summer'
+                else:
+                    return 'Cfa - Humid Subtropical'
+            else:
+                if min(precips[3:8]) < 40:
+                    return 'Csb - Mediterranean Warm Summer'
+                else:
+                    return 'Cfb - Oceanic Climate'
+        elif min(temps) < 0:
+            if max(temps) > 22:
+                if min(precips[3:8]) < 40:
+                    return 'Dsa - Mediterranean Hot Summer Continental'
+                else:
+                    return 'Dfa - Humid Continental Hot Summer'
+            else:
+                if min(precips[3:8]) < 40:
+                    return 'Dsb - Mediterranean Warm Summer Continental'
+                else:
+                    return 'Dfb - Humid Continental Warm Summer'
+        else:
+            if max(temps) < 10:
+                if max(temps) > 0:
+                    return 'ET - Tundra'
+                else:
+                    return 'EF - Ice Cap' 

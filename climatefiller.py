@@ -1749,8 +1749,88 @@ class ClimateFiller():
             
     def watt_to_megaj_per_hour(self, column_name='rs'):
         self.data.transform_column(column_name, lambda o: o * 0.0036)
-            
+        
+      
+    def climate_zones_classification(self,):
+        """
+        Classifies the climate zones based on temperature, precipitation and evapotranspration data.
 
+        Args:
+            self (object): The instance of the class.
+
+        Returns:
+            None
+
+        Notes:
+            - The climate_zones_classification method is used to classify the climate zones based on temperature and precipitation data.
+            - The method iterates over the data and assigns a climate zone based on the temperature and precipitation values.
+            - The classified climate zones are stored in a new column named 'climate_zone'.
+            - The method assumes that the temperature and precipitation data are available in the data.
+        """
+        self.data.index_to_column()
+        self.data.column_to_date(self.datetime_column_name)
+
+        # DataFrame to store results
+        results = []
+        self.data.add_year_column()
+        # Calculate indices for each year
+        station_data = self.data.dataframe.copy()
+
+        yearly_results = []
+
+        for year in station_data['year'].unique():
+            yearly_data = station_data[station_data['year'] == year]
+            
+            if yearly_data.shape[0] == 365 or yearly_data.shape[0] == 366:
+                annual_precip = yearly_data['p'].sum()
+                annual_temp = yearly_data['ta'].mean()
+                annual_pet = yearly_data['et0_pm'].sum()
+                
+                tsi = Lib.temperature_seasonality_index(yearly_data['ta'])
+                psi = Lib.precipitation_seasonality_index(yearly_data['p'])
+                tmi = Lib.thornthwaite_moisture_index(annual_precip, annual_pet)
+                ai = Lib.aridity_index(annual_precip, annual_pet)
+                kg_classification = Lib.classify_koppen_geiger(yearly_data['ta'].tolist(), yearly_data['p'].tolist(), annual_precip, annual_temp)
+                
+                yearly_results.append({
+                    'Year': year,
+                    'Temperature Seasonality Index (TSI)': tsi,
+                    'Precipitation Seasonality Index (PSI)': psi,
+                    'Thornthwaite Moisture Index (TMI)': tmi,
+                    'Aridity Index (AI)': ai,
+                    'Köppen-Geiger Classification': kg_classification,
+                    'Annual Potential Evapotranspiration (mm)': annual_pet
+                })
+            
+            else:
+                # drop the year from the dataframe if it is not complete
+                station_data = station_data[station_data['year'] != year]
+                
+
+        # Calculate average indices over the years
+        yearly_df = pd.DataFrame(yearly_results)
+        avg_tsi = yearly_df['Temperature Seasonality Index (TSI)'].mean()
+        avg_psi = yearly_df['Precipitation Seasonality Index (PSI)'].mean()
+        avg_tmi = yearly_df['Thornthwaite Moisture Index (TMI)'].mean()
+        avg_ai = yearly_df['Aridity Index (AI)'].mean()
+
+        results.append({
+            'Most Frequent Köppen-Geiger Classification': yearly_df['Köppen-Geiger Classification'].mode()[0],  # Most frequent classification
+            'Average Thornthwaite Moisture Index (TMI)': np.round(avg_tmi , 2),
+            'Average Aridity Index (AI)': np.round(avg_ai , 2),
+            'Average Temperature Seasonality Index (TSI)': np.round(avg_tsi , 2),
+            'Average Preicipitaton Seasonality Index (PSI)': np.round(avg_psi , 2),
+            'Mean Annual Temperature (°C)': np.round(station_data.groupby('year')['ta'].mean().mean(), 2),
+            'Total Annual Precipitation (mm)': np.round(station_data.groupby('year')['p'].sum().mean(), 2),
+            'Annual Potential Evapotranspiration (mm)': np.round(station_data.groupby('year')['et0_pm'].sum().mean(), 2),
+        })
+
+        print(results)
+        results_df = pd.DataFrame(yearly_df)
+        
+        return results_df, results
+           
+    
     """def learn_error(self,):
         data_x =
         data_y =
