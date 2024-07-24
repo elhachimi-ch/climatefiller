@@ -317,7 +317,7 @@ class ClimateFiller():
                     nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
                     data.drop_duplicated_indexes()
                     
-                    l = []
+                    l = [] 
                     for p in data.get_index():
                         if p.hour == 1:
                             new_value = data.get_row(p)['tp'] * 1000
