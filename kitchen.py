@@ -142,61 +142,7 @@ def main():
     
     data = DataFrame("data/oukaimeden_full_p_et0_bc.csv")
     
-    # Create a study with CMA-ES sampler and Hyperband pruner
-    sampler = CmaEsSampler()
-    pruner = MedianPruner() 
-    
-    # Create a study object
-    study = optuna.create_study(direction='minimize', sampler=sampler, pruner=pruner)
-    
-    # Manually create the initial trial with specific values
-    #initial_trial = {'alpha': 1.26}  # Specify your initial values here
-    #initial_trial = {'c1': 0.61, 'c2': 0.12}  # Specify your initial values here
-    initial_trial = {'k1': 0.53}  # Specify your initial values here
-    #initial_trial = {'c': 0.0023, 'a': 17.8, 'b': 0.5}  # Specify your initial values here
-    study.enqueue_trial(initial_trial)  # Enqueue the initial trial
-
-    # Run the optimization
-    study.optimize(lambda trial: objective(trial, data), n_trials=1000)
-
-     # Print the best parameters
-    print("Best parameters: ", study.best_params)
-    print("Best value: ", study.best_value)
-    
-    # PT
-    #alpha = study.best_params['alpha']
-    
-    # MK
-    #c1, c2 = study.best_params['c1'], study.best_params['c2']
-    
-    # AB
-    k1 = study.best_params['k1']
-    
-    # HS
-    """c = study.best_params['c']
-    a = study.best_params['a']
-    b = study.best_params['b']"""
-
-    # Calculate the fitted ET values HS
-    #data.add_column_based_on_function('predictions', lambda row: Lib.et0_hargreaves_samani(row, c=c, a=a, b=b))
-    
-    # Calculate the fitted ET values PT
-    #data.add_column_based_on_function('predictions', lambda row: Lib.et0_priestley_taylor_daily(row, alpha=alpha))
-    
-    # Calculate the fitted ET values MK
-    data.add_column_based_on_function('predictions', lambda row: Lib.et0_abtew(row, k1))
-    
-    # Calculate the fitted ET values AB
-    
-    
-    print('Comparison: ', data.similarity_measure('et0_pm', 'predictions', 'ts'))
-    # Plot the observed vs fitted values
-    """plt.scatter(data.get_column('et0_pm'), data.get_column('predictions'))
-    plt.xlabel('Observed ET')
-    plt.ylabel('Fitted ET')
-    plt.title('Observed vs Fitted ET')
-    plt.plot([min(data.get_column('et0_pm')), max(data.get_column('et0_pm'))], [min(data.get_column('et0_pm')), max(data.get_column('et0_pm'))], 'r--')
-    plt.show()"""
+    print(data.similarity_measure('et0_pm', 'et0_hs_bc', 'ts'))
 
     
    
