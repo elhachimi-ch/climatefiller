@@ -675,13 +675,32 @@ class Lib:
         return elevation
     
     @staticmethod
-    def logarithmic_wind_profile(u, v, z_source=10, z_target=2):
+    def logarithmic_wind_profile(u, v, z_source=10, z_target=2, z0=0.03):
+        """
+        Calculate wind speed at 2 meters given wind speed components at 10 meters.
         
-        # Calculate wind speed at 10 meters
+        Parameters:
+        u10 (float): Wind speed component in the u-direction at 10 meters (m/s).
+        v10 (float): Wind speed component in the v-direction at 10 meters (m/s).
+        z_source (float): Source height where wind speed is measured (default is 10 meters).
+        z_target (float): Target height where wind speed is to be estimated (default is 2 meters).
+        z0 (float): Roughness length (default is 0.03 meters, adjust based on terrain).
+                Typical values for roughness length:
+                - Short grass: 0.01 - 0.03 meters
+                - Tall grass: 0.1 - 0.2 meters
+                - Crops: 0.05 - 0.25 meters (depending on height and density)
+                - Shrubs: 0.1 - 0.5 meters
+                - Forests: 1.0 - 2.0 meters (varies with tree height and density)
+                - Urban areas: 0.5 - 1.5 meters (depends on building density and height)
+        
+        Returns:
+        float: Estimated wind speed at 2 meters (m/s).
+        """
+        # Calculate wind speed at the source height (10 meters)
         wind_speed_source = math.sqrt(u**2 + v**2)
         
-        # Calculate wind speed at 2 meters using the logarithmic wind profile
-        wind_speed_target = wind_speed_source * (math.log(z_target / z_source) / math.log(z_target / z_source))
+        # Calculate wind speed at the target height (2 meters) using the logarithmic wind profile
+        wind_speed_target = wind_speed_source * (math.log(z_target / z0) / math.log(z_source / z0))
         
         return wind_speed_target
     
