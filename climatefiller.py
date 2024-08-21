@@ -1822,7 +1822,7 @@ class ClimateFiller():
             'Average Preicipitaton Seasonality Index (PSI)': np.round(avg_psi , 2),
             'Mean Annual Temperature (°C)': np.round(station_data.groupby('year')['ta'].mean().mean(), 2),
             'Total Annual Precipitation (mm)': np.round(station_data.groupby('year')['p'].sum().mean(), 2),
-            'Annual Potential Evapotranspiration (mm)': np.round(station_data.groupby('year')['et0_pm'].sum().mean(), 2),
+            'Annual Reference Evapotranspiration (mm)': np.round(station_data.groupby('year')['et0_pm'].sum().mean(), 2),
         })
 
         print(results)
