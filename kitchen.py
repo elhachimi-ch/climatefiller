@@ -141,8 +141,8 @@ def main():
     ti = time.time()
     
     #data = DataFrame("data/oukaimeden_full_p_et0_bc.csv")
-    #cf = ClimateFiller(r"data\r3_full_p_et0_bc.csv")
-    cf = ClimateFiller(r"C:\Users\elhac\OneDrive\Desktop\kitchen\projects\pythonsnippets\data\california\cimis_data.csv")
+    cf = ClimateFiller(r"data\r3_full_p_et0_bc.csv")
+    #cf = ClimateFiller(r"C:\Users\elhac\OneDrive\Desktop\kitchen\projects\pythonsnippets\data\california\cimis_data.csv")
     
     print(cf.climate_zones_classification())
 

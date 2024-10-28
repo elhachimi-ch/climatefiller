@@ -1780,7 +1780,8 @@ class ClimateFiller():
 
         for year in station_data['year'].unique():
             yearly_data = station_data[station_data['year'] == year]
-            
+            # reindex yearly_data using datetime column
+            yearly_data.set_index('datetime', inplace=True)
             if yearly_data.shape[0] == 365 or yearly_data.shape[0] == 366:
                 annual_precip = yearly_data['p'].sum()
                 annual_temp = yearly_data['ta'].mean()
@@ -1790,10 +1791,9 @@ class ClimateFiller():
                 psi = Lib.precipitation_seasonality_index(yearly_data['p'])
                 tmi = Lib.thornthwaite_moisture_index(annual_precip, annual_pet)
                 ai = Lib.aridity_index(annual_precip, annual_pet)
-                print(yearly_data['ta'].tolist())
-                print(yearly_data['p'].tolist())
-                print(len(yearly_data['p'].tolist()))
-                kg_classification = Lib.classify_koppen_geiger(yearly_data['ta'].tolist(), yearly_data['p'].tolist(), annual_precip, annual_temp)
+                #print(yearly_data['ta'])
+                #kg_classification = Lib.classify_koppen_geiger(yearly_data['ta'].tolist(), yearly_data['p'].tolist(), annual_precip, annual_temp)
+                kg_classification = Lib.classify_koppen_geiger_daily(yearly_data['ta'], yearly_data['p'])
                 yearly_results.append({
                     'Year': year,
                     'Temperature Seasonality Index (TSI)': tsi,
@@ -1801,7 +1801,7 @@ class ClimateFiller():
                     'Thornthwaite Moisture Index (TMI)': tmi,
                     'Aridity Index (AI)': ai,
                     'Köppen-Geiger Classification': kg_classification,
-                    'Annual Potential Evapotranspiration (mm)': annual_pet
+                    'Annual Potential Evapotranspiration (mm)': annual_pet,
                 })
             
             else:

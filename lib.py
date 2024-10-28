@@ -12,6 +12,7 @@ from datetime import datetime
 import pytz
 import geocoder
 import numpy as np
+import pandas as pd
 
 
 class Lib:
@@ -1322,9 +1323,106 @@ class Lib:
     @staticmethod
     def aridity_index(annual_precip, annual_pet):
         return annual_precip / annual_pet
+    
+    def classify_koppen_geiger_daily(daily_temps, daily_precips):
+        """
+        Classify a location based on the Köppen-Geiger climate classification system
+        using daily temperature and precipitation data.
+        
+        Args:
+        daily_temps (pd.Series): Daily temperatures in Celsius with a datetime index.
+        daily_precips (pd.Series): Daily precipitation totals in mm with a datetime index.
+        
+        Returns:
+        str: Köppen-Geiger climate classification (e.g., "Af", "BWh", "Csa", etc.)
+        """
+        
+        # Ensure the input is a pandas Series with a datetime index
+        if not isinstance(daily_temps, pd.Series) or not isinstance(daily_precips, pd.Series):
+            raise ValueError("Input data must be pandas Series with datetime index.")
+        
+        # Resample daily data to get monthly averages (temperature) and totals (precipitation)
+        monthly_temps = daily_temps.resample('M').mean()
+        monthly_precips = daily_precips.resample('M').sum()
+        print(monthly_temps)
+        print(monthly_precips)
+        
+        # Calculate annual averages and totals
+        annual_temp = monthly_temps.mean()
+        annual_precip = monthly_precips.sum()
+        
+        # Tropical climates (A)
+        if all(temp > 18 for temp in monthly_temps):
+            if min(monthly_precips) >= 60:
+                return 'Af - Tropical Rainforest'
+            elif min(monthly_precips) < 60 and annual_precip >= 25 * (100 - (100 / (np.std(monthly_precips) / np.mean(monthly_precips)))):
+                return 'Am - Tropical Monsoon'
+            else:
+                return 'Aw - Tropical Savanna'
+        
+        # Arid climates (B)
+        if annual_precip < 10 * annual_temp:
+            if annual_precip < 5 * annual_temp:
+                return 'BW - Arid Desert'
+            else:
+                return 'BS - Arid Steppe'
+        
+        # Temperate climates (C) and Cold climates (D)
+        if min(monthly_temps) >= 0:
+            return Lib.classify_temperate_climate(monthly_temps, monthly_precips)
+        
+        elif min(monthly_temps) < 0:
+            return Lib.classify_cold_climate(monthly_temps, monthly_precips)
+        
+        # Polar climates (E)
+        if max(monthly_temps) < 10:
+            if max(monthly_temps) > 0:
+                return 'ET - Tundra'
+            else:
+                return 'EF - Ice Cap'
+        
+        return 'Unknown'
 
     @staticmethod
-    def classify_koppen_geiger(temps, precips, annual_precip, annual_temp):
+    def classify_temperate_climate(monthly_temps, monthly_precips):
+        """
+        Classify temperate climates (C) based on monthly data.
+        """
+        warmest_months = np.argsort(monthly_temps)[-4:]  # Get the warmest 4 months (approximate summer)
+        driest_summer_precip = min(monthly_precips[warmest_months])
+        
+        if max(monthly_temps) > 22:  # Hot summer
+            if driest_summer_precip < 40:
+                return 'Csa - Mediterranean Hot Summer'
+            else:
+                return 'Cfa - Humid Subtropical'
+        else:  # Warm summer
+            if driest_summer_precip < 40:
+                return 'Csb - Mediterranean Warm Summer'
+            else:
+                return 'Cfb - Oceanic Climate'
+
+    def classify_cold_climate(monthly_temps, monthly_precips):
+        """
+        Classify cold climates (D) based on monthly data.
+        """
+        warmest_months = np.argsort(monthly_temps)[-4:]  # Get the warmest 4 months (approximate summer)
+        driest_summer_precip = min(monthly_precips[warmest_months])
+        
+        if max(monthly_temps) > 22:  # Hot summer
+            if driest_summer_precip < 40:
+                return 'Dsa - Mediterranean Hot Summer Continental'
+            else:
+                return 'Dfa - Humid Continental Hot Summer'
+        else:  # Warm summer
+            if driest_summer_precip < 40:
+                return 'Dsb - Mediterranean Warm Summer Continental'
+            else:
+                return 'Dfb - Humid Continental Warm Summer'
+    
+    
+    @staticmethod
+    def classify_koppen_geiger_old(temps, precips, annual_precip, annual_temp):
         if all(temp > 18 for temp in temps):
             if min(precips) >= 60:
                 return 'Af - Tropical Rainforest'
