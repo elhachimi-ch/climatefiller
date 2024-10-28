@@ -1790,6 +1790,9 @@ class ClimateFiller():
                 psi = Lib.precipitation_seasonality_index(yearly_data['p'])
                 tmi = Lib.thornthwaite_moisture_index(annual_precip, annual_pet)
                 ai = Lib.aridity_index(annual_precip, annual_pet)
+                print(yearly_data['ta'].tolist())
+                print(yearly_data['p'].tolist())
+                print(len(yearly_data['p'].tolist()))
                 kg_classification = Lib.classify_koppen_geiger(yearly_data['ta'].tolist(), yearly_data['p'].tolist(), annual_precip, annual_temp)
                 yearly_results.append({
                     'Year': year,
