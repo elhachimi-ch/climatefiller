@@ -140,9 +140,11 @@ def objective(trial, data):
 def main():
     ti = time.time()
     
-    data = DataFrame("data/oukaimeden_full_p_et0_bc.csv")
+    #data = DataFrame("data/oukaimeden_full_p_et0_bc.csv")
+    #cf = ClimateFiller(r"data\r3_full_p_et0_bc.csv")
+    cf = ClimateFiller(r"C:\Users\elhac\OneDrive\Desktop\kitchen\projects\pythonsnippets\data\california\cimis_data.csv")
     
-    print(data.similarity_measure('et0_pm', 'et0_hs_bc', 'ts'))
+    print(cf.climate_zones_classification())
 
     
    

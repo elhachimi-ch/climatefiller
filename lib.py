@@ -1364,4 +1364,5 @@ class Lib:
                 if max(temps) > 0:
                     return 'ET - Tundra'
                 else:
-                    return 'EF - Ice Cap' 
+                    return 'EF - Ice Cap'
+           

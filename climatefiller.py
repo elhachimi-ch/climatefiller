@@ -1791,7 +1791,6 @@ class ClimateFiller():
                 tmi = Lib.thornthwaite_moisture_index(annual_precip, annual_pet)
                 ai = Lib.aridity_index(annual_precip, annual_pet)
                 kg_classification = Lib.classify_koppen_geiger(yearly_data['ta'].tolist(), yearly_data['p'].tolist(), annual_precip, annual_temp)
-                
                 yearly_results.append({
                     'Year': year,
                     'Temperature Seasonality Index (TSI)': tsi,
@@ -1813,7 +1812,7 @@ class ClimateFiller():
         avg_psi = yearly_df['Precipitation Seasonality Index (PSI)'].mean()
         avg_tmi = yearly_df['Thornthwaite Moisture Index (TMI)'].mean()
         avg_ai = yearly_df['Aridity Index (AI)'].mean()
-
+        print(yearly_df)
         results.append({
             'Most Frequent Köppen-Geiger Classification': yearly_df['Köppen-Geiger Classification'].mode()[0],  # Most frequent classification
             'Average Thornthwaite Moisture Index (TMI)': np.round(avg_tmi , 2),
