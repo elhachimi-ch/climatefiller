@@ -1215,8 +1215,6 @@ class ClimateFiller():
 
     def download(self, 
     variable, 
-    lon=-7.593311291,
-    lat=31.66749781,
     start_date='2021-01-01',
     end_date='2021-02-01',
     product='era5_land',
@@ -1351,11 +1349,11 @@ class ClimateFiller():
                 elif variable == 'rh':
                     era5_land_variables = ['temperature_2m', 'dewpoint_temperature_2m']
                     
-                    output_file = 'data/era5_land_' + '_'.join([variable, str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
+                    output_file = 'data/era5_land_' + '_'.join([variable, str(self.lon), str(self.lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
                     if os.path.exists(output_file):
                         print(f"Time series already downloaded on: {output_file}")
                     else:
-                        self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
+                        self.download_era5_land_data_by_years(era5_land_variables, self.lon, self.lat, start_date, end_date + timedelta(1))
                         
                         for year in range(start_date.year, end_date.year + 1):
                             cache_path = 'data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
@@ -1363,11 +1361,11 @@ class ClimateFiller():
                             data.append_dataframe(temp_data.get_dataframe())
                             
                         if not 'temperature_2m' in temp_data.get_columns_names() and 'dewpoint_temperature_2m' in temp_data.get_columns_names():
-                            print(f'No data found in GEE about {variable} for ({lon, lat})')
+                            print(f'No data found in GEE about {variable} for ({self.lon, self.lat})')
                             #cf = ClimateFiller()
                             #cf.download(variable, start_datetime, start_datetime + next_year, longitude, latitude)
                         else:
-                            output_file = 'data/' + '_'.join([variable, str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
+                            output_file = 'data/' + '_'.join([variable, str(self.lon), str(self.lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
                             data.rename_columns({'temperature_2m': 't2m', 'dewpoint_temperature_2m': 'd2m'})
                             data.transform_column('t2m', lambda o: o - 273.15)
                             data.transform_column('d2m', lambda o: o - 273.15)
@@ -1478,26 +1476,24 @@ class ClimateFiller():
                     # era5_land_variables = ['temperature_2m', 'dewpoint_temperature_2m']
                     era5_land_variables = variable
                     
-                    output_file = 'data/era5_land_' + '_'.join(variable + [str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
+                    output_file = 'data/era5_land_' + '_'.join(variable + [str(self.lon), str(self.lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
                     if os.path.exists(output_file):
                         print(f"Time series already downloaded on: {output_file}")
                     else:
-                        self.download_era5_land_data_by_years(era5_land_variables, lon, lat, start_date, end_date + timedelta(1))
+                        self.download_era5_land_data_by_years(era5_land_variables, start_date, end_date + timedelta(1))
                         
                         for year in range(start_date.year, end_date.year + 1):
-                            cache_path = 'data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv'
+                            cache_path = 'data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(self.lon), str(self.lat), str(year)]) + '.csv'
                             temp_data = DataFrame(cache_path)
                             data.append_dataframe(temp_data.get_dataframe())
                             
                         
-                        output_file = 'data/era5_land_' + '_'.join(variable + [str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
+                        output_file = 'data/era5_land_' + '_'.join(variable + [str(self.lon), str(self.lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
                         data.column_to_date('datetime')
                         data.reindex_dataframe('datetime')
                         end_date += timedelta(1)
                         data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
                         data.export(output_file, index=True)
-                        
-        
                 
             else:
                 output_file = 'data/ta_' + '_'.join([str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
