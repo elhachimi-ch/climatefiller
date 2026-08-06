@@ -2,6 +2,7 @@ from data_science_toolkit.dataframe import DataFrame
 from data_science_toolkit.model import Model
 import datetime
 import json
+import logging
 import os
 import time
 from datetime import timedelta
@@ -14,7 +15,7 @@ import ee
 import geemap
 import re
 import requests
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error, median_absolute_error
 from xgboost import XGBRegressor
 from catboost import CatBoostRegressor
 from sklearn.tree import DecisionTreeRegressor 
@@ -23,6 +24,12 @@ import numpy as np
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
 from sklearn.model_selection import KFold, train_test_split
 import geopandas as gpd
+from tqdm import tqdm
+
+
+LOGGER = logging.getLogger(__name__)
+if not LOGGER.handlers:
+    logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 
 class ClimateFiller():
@@ -68,7 +75,8 @@ class ClimateFiller():
         self._ml_impute_config = {
             'train_ratio': 1,
             'model_name': 'xgboost',
-            'model_kwargs': {}
+            'model_kwargs': {},
+            'export_dataset': False,
         }
         self.et0_output_data = DataFrame()
         if backend == 'gee':
@@ -168,11 +176,6 @@ class ClimateFiller():
         return pd.DataFrame(
             {
                 'source_value': src.values,
-                'hour': dt_index.hour,
-                'day': dt_index.day,
-                'month': dt_index.month,
-                'dayofyear': dt_index.dayofyear,
-                'year': dt_index.year,
             },
             index=dt_index,
         )
@@ -242,7 +245,18 @@ class ClimateFiller():
         cache_df = source_series.rename('source_value').to_frame()
         cache_df.index.name = 'datetime'
         cache_df.to_csv(cache_path)
+        LOGGER.info("Source cache saved: %s (%d rows)", cache_path, len(cache_df))
         print(f"Saved source cache to {cache_path}")
+
+    @staticmethod
+    def _to_json_safe(value):
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, dict):
+            return {k: ClimateFiller._to_json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [ClimateFiller._to_json_safe(v) for v in value]
+        return value
 
     def _save_error_model_artifact(self, model, feature_columns, column_to_fill_name, product, model_name, performance):
         model_artifact_name = f"{product}_{column_to_fill_name}_{model_name}_error_model.data"
@@ -257,14 +271,51 @@ class ClimateFiller():
             'product': product,
             'model_name': model_name,
             'trained_at': datetime.datetime.utcnow().isoformat(),
-            'performance': performance,
+            'performance': self._to_json_safe(performance),
         }
         with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
+        LOGGER.info("Model artifact saved: %s", model_artifact_path)
+        LOGGER.info("Model metadata saved: %s", metadata_path)
         print(f"Saved ML artifact to {model_artifact_path}")
         print(f"Saved ML metadata to {metadata_path}")
 
-    def _train_error_model(self, column_to_fill_name, source_series, product, train_ratio=1, model_name='xgboost', **model_kwargs):
+    def _save_training_dataset_artifact(self, train_dataset, column_to_fill_name, product, model_name):
+        dataset_name = f"{product}_{column_to_fill_name}_{model_name}_training_dataset.csv"
+        dataset_path = os.path.join(self.artifact_folder, dataset_name)
+        export_df = train_dataset.copy()
+        export_df.index.name = 'datetime'
+        export_df.to_csv(dataset_path)
+        LOGGER.info("Training dataset saved: %s (%d rows)", dataset_path, len(export_df))
+        print(f"Saved training dataset to {dataset_path}")
+
+    @staticmethod
+    def _model_regression_report(model, y_true, y_pred):
+        y_true_series = pd.Series(np.asarray(y_true).reshape(-1), name='y_test')
+        y_pred_array = np.asarray(y_pred).reshape(-1)
+        try:
+            return model.regression_report(y_true_series, y_pred_array)
+        except Exception as e:
+            LOGGER.warning("Model.regression_report failed (%s). Falling back to direct metric computation.", e)
+            # Keep imputation running if the toolkit report fails due internal plotting/dataframe constraints.
+            return {
+                'R2': float(r2_score(y_true_series, y_pred_array)),
+                'R': float(np.corrcoef(y_true_series.to_numpy(), y_pred_array)[0][1]),
+                'MSE': float(mean_squared_error(y_true_series, y_pred_array)),
+                'RMSE': float(np.sqrt(mean_squared_error(y_true_series, y_pred_array))),
+                'MAE': float(mean_absolute_error(y_true_series, y_pred_array)),
+                'MEDAE': float(median_absolute_error(y_true_series, y_pred_array)),
+            }
+
+    def _train_error_model(self, column_to_fill_name, source_series, product, train_ratio=1, model_name='xgboost', export_dataset=False, **model_kwargs):
+        LOGGER.info(
+            "Training error model: variable=%s product=%s model=%s train_ratio=%s export_dataset=%s",
+            column_to_fill_name,
+            product,
+            model_name,
+            train_ratio,
+            export_dataset,
+        )
         source_series = source_series[~source_series.index.duplicated(keep='first')].sort_index()
         insitu_series = self.data.get_dataframe()[column_to_fill_name]
         train_df = pd.concat(
@@ -283,7 +334,12 @@ class ClimateFiller():
             return None, None, None
 
         X = self._build_error_features(train_df.index, train_df['source_value'])
-        y = train_df['insitu_value'] - train_df['source_value']
+        y = train_df['insitu_value']
+        target_column_name = 'insitu_value'
+        LOGGER.info("Training feature columns: %s", list(X.columns))
+        LOGGER.info("Training target column: %s", target_column_name)
+        print(f"Features used for training: {list(X.columns)}")
+        print(f"Target used for training: {target_column_name}")
         model_type = self._resolve_model_type(model_name)
         train_ratio = float(train_ratio)
         if train_ratio <= 0 or train_ratio > 1:
@@ -301,6 +357,16 @@ class ClimateFiller():
         else:
             x_train, y_train = X, y
             x_test, y_test = None, None
+
+        if export_dataset:
+            train_dataset = x_train.copy()
+            train_dataset[target_column_name] = y_train
+            self._save_training_dataset_artifact(
+                train_dataset,
+                column_to_fill_name,
+                product,
+                model_name,
+            )
 
         try:
             model = Model(
@@ -320,18 +386,32 @@ class ClimateFiller():
         performance = {
             'training_time_sec': training_time_sec,
             'train_ratio': train_ratio,
-            'rmse': None,
-            'r2': None,
+            'regression_report': None,
             'n_samples': int(len(X)),
             'n_train': int(len(x_train)),
             'n_test': int(len(x_test)) if x_test is not None else 0,
         }
 
-        if x_test is not None and len(x_test) > 0:
-            y_pred = model.predict(x_test)
-            y_pred = np.squeeze(np.asarray(y_pred))
-            performance['rmse'] = float(np.sqrt(mean_squared_error(y_test, y_pred)))
-            performance['r2'] = float(r2_score(y_test, y_pred))
+        x_eval, y_eval = (x_test, y_test) if x_test is not None and len(x_test) > 0 else (x_train, y_train)
+        y_eval_pred = model.predict(x_eval)
+        y_eval_pred = np.asarray(y_eval_pred).reshape(-1)
+        y_eval = np.asarray(y_eval).reshape(-1)
+        report = self._model_regression_report(model, y_eval, y_eval_pred)
+        performance['regression_report'] = report
+
+        print(f"Regression report ({'test' if x_test is not None and len(x_test) > 0 else 'train'}): {report}")
+        LOGGER.info(
+            "Regression report (%s): %s",
+            'test' if x_test is not None and len(x_test) > 0 else 'train',
+            report,
+        )
+
+        LOGGER.info(
+            "Model metrics: training_time_sec=%.4f n_train=%d n_test=%d",
+            performance['training_time_sec'],
+            performance['n_train'],
+            performance['n_test'],
+        )
 
         self._save_error_model_artifact(
             model,
@@ -359,16 +439,18 @@ class ClimateFiller():
                 product,
                 train_ratio=self._ml_impute_config.get('train_ratio', 1),
                 model_name=self._ml_impute_config.get('model_name', 'xgboost'),
+                export_dataset=self._ml_impute_config.get('export_dataset', False),
                 **self._ml_impute_config.get('model_kwargs', {}),
             )
             if performance is not None:
                 print(
                     f"ML performance for {column_to_fill_name}: "
                     f"training_time_sec={performance['training_time_sec']:.3f}, "
-                    f"rmse={performance['rmse']}, r2={performance['r2']}"
+                    f"regression_report={performance['regression_report']}"
                 )
 
-        for p in missing_indexes:
+        missing_iter = tqdm(missing_indexes, desc=f"Impute {column_to_fill_name}", unit="row")
+        for p in missing_iter:
             p_ts = self._as_timestamp(p)
             if p_ts not in source_series.index:
                 continue
@@ -381,8 +463,8 @@ class ClimateFiller():
             if model is not None:
                 features = self._build_error_features([p_ts], [source_value])
                 features = features[feature_columns]
-                predicted_error = float(model.predict(features)[0])
-                filled_value = filled_value + predicted_error
+                predicted_insitu_value = float(model.predict(features)[0])
+                filled_value = predicted_insitu_value
 
             self.data.set_row(column_to_fill_name, p, filled_value)
         
@@ -409,6 +491,416 @@ class ClimateFiller():
             return print(self.data.get_dataframe().tail(abs(number_of_row)))
         else:
             return print(self.data.get_dataframe().head(number_of_row))
+
+    def resample(self, column_agg_map, frequency='D', keep_columns=None):
+        """
+        Resample in-situ data with per-column aggregation specs.
+
+        Args:
+            column_agg_map (dict): Mapping of column name to aggregation spec.
+                Example: {'ta': ['max', 'min', 'mean'], 'p': 'sum'}
+            frequency (str): Pandas frequency string, e.g., 'H', 'D', 'M'.
+            keep_columns (list/tuple/set or None): Optional output columns filter.
+                Supports exact names (e.g., 'ta_max') and base names (e.g., 'ta').
+
+        Returns:
+            pandas.DataFrame: Resampled dataframe.
+        """
+        df = self.data.get_dataframe().copy()
+        resampled_df = self._resample_dataframe(
+            df,
+            column_agg_map=column_agg_map,
+            frequency=frequency,
+            keep_columns=keep_columns,
+            datetime_candidates=[self.datetime_column_name, 'datetime', 'date'],
+        )
+
+        self.data.set_dataframe(resampled_df)
+        LOGGER.info(
+            "In-situ data resampled: frequency=%s columns=%s",
+            frequency,
+            list(resampled_df.columns),
+        )
+        return self.data.get_dataframe()
+
+    @staticmethod
+    def _load_dataframe_from_path(file_path):
+        data_type = ClimateFiller._infer_data_type(file_path)
+        if data_type == 'csv':
+            return pd.read_csv(file_path)
+        if data_type == 'xls' or data_type == 'xlsx':
+            return pd.read_excel(file_path)
+        if data_type == 'json':
+            return pd.read_json(file_path)
+        if data_type == 'parquet':
+            return pd.read_parquet(file_path)
+        raise ValueError(f"Unsupported file type for batch resample: {file_path}")
+
+    @staticmethod
+    def _save_dataframe_to_path(df, output_path):
+        data_type = ClimateFiller._infer_data_type(output_path)
+        if data_type == 'csv':
+            df.to_csv(output_path)
+            return
+        if data_type == 'xls' or data_type == 'xlsx':
+            df.to_excel(output_path)
+            return
+        if data_type == 'json':
+            df.to_json(output_path, orient='records', date_format='iso')
+            return
+        if data_type == 'parquet':
+            df.to_parquet(output_path)
+            return
+        raise ValueError(f"Unsupported output file type for batch resample: {output_path}")
+
+    @staticmethod
+    def _resample_dataframe(df, column_agg_map, frequency='D', keep_columns=None, datetime_candidates=None):
+        if not isinstance(column_agg_map, dict) or len(column_agg_map) == 0:
+            raise ValueError("column_agg_map must be a non-empty dict.")
+
+        if datetime_candidates is None:
+            datetime_candidates = ['datetime']
+
+        data = df.copy()
+        if not isinstance(data.index, pd.DatetimeIndex):
+            datetime_col = None
+            for candidate in datetime_candidates:
+                if candidate in data.columns:
+                    datetime_col = candidate
+                    break
+
+            if datetime_col is None:
+                raise ValueError(
+                    "Data must have a DatetimeIndex or a valid datetime column to resample."
+                )
+
+            data[datetime_col] = pd.to_datetime(data[datetime_col])
+            data = data.set_index(datetime_col)
+
+        normalized = {}
+        missing_cols = []
+        for column_name, agg_spec in column_agg_map.items():
+            if column_name not in data.columns:
+                missing_cols.append(column_name)
+                continue
+
+            if isinstance(agg_spec, (list, tuple, set)):
+                normalized[column_name] = list(agg_spec)
+            else:
+                normalized[column_name] = [agg_spec]
+
+        if missing_cols:
+            raise ValueError(f"Columns not found for resampling: {missing_cols}")
+
+        resampled_df = data.resample(frequency).agg(normalized)
+
+        if isinstance(resampled_df.columns, pd.MultiIndex):
+            flat_columns = []
+            for column_name, agg_name in resampled_df.columns:
+                if callable(agg_name):
+                    agg_label = getattr(agg_name, '__name__', 'agg')
+                else:
+                    agg_label = str(agg_name)
+                flat_columns.append(f"{column_name}_{agg_label}")
+            resampled_df.columns = flat_columns
+
+        if keep_columns is not None:
+            if not isinstance(keep_columns, (list, tuple, set)):
+                raise ValueError("keep_columns must be a list/tuple/set of column names.")
+
+            keep_set = set(keep_columns)
+            selected_columns = [
+                column_name
+                for column_name in resampled_df.columns
+                if column_name in keep_set or column_name.split('_')[0] in keep_set
+            ]
+
+            for keep_col in keep_set:
+                if keep_col in data.columns and keep_col not in selected_columns:
+                    selected_columns.append(keep_col)
+
+            if len(selected_columns) == 0:
+                raise ValueError(
+                    f"No columns matched keep_columns={list(keep_columns)}. "
+                    f"Available columns: {list(resampled_df.columns)}"
+                )
+
+            static_cols = [col for col in selected_columns if col in data.columns]
+            if len(static_cols) > 0:
+                static_resampled = data[static_cols].resample(frequency).first()
+                resampled_df = resampled_df[[c for c in selected_columns if c in resampled_df.columns]]
+                for static_col in static_cols:
+                    resampled_df[static_col] = static_resampled[static_col]
+
+            final_columns = [c for c in selected_columns if c in resampled_df.columns]
+            resampled_df = resampled_df[final_columns]
+
+        return resampled_df
+
+    def resample_batch(self, input_folder, output_folder, column_agg_map, frequency='D', keep_columns=None, prefix=None):
+        """
+        Batch resample in-situ files from input_folder and save to output_folder.
+
+        Args:
+            input_folder (str): Folder containing in-situ files.
+            output_folder (str): Destination folder for resampled files.
+            column_agg_map (dict): Same as resample().
+            frequency (str): Same as resample().
+            keep_columns (list/tuple/set or None): Same as resample().
+            prefix (str or None): If provided, process only files that start with prefix.
+
+        Returns:
+            list: Output file paths generated.
+        """
+        if not os.path.isdir(input_folder):
+            raise ValueError(f"input_folder does not exist: {input_folder}")
+
+        self.check_directory_existance(output_folder)
+
+        supported_exts = {'.csv', '.xls', '.xlsx', '.json', '.parquet', '.pq', '.pqt'}
+        files = []
+        for name in os.listdir(input_folder):
+            path = os.path.join(input_folder, name)
+            if not os.path.isfile(path):
+                continue
+            if prefix is not None and not name.startswith(prefix):
+                continue
+            if os.path.splitext(name)[1].lower() not in supported_exts:
+                continue
+            files.append(name)
+
+        files = sorted(files)
+
+        if len(files) == 0:
+            LOGGER.warning("No input files found for resample_batch in %s with prefix=%s", input_folder, prefix)
+            return []
+
+        LOGGER.info(
+            "Starting batch resample: %d file(s), frequency=%s, prefix=%s",
+            len(files),
+            frequency,
+            prefix,
+        )
+
+        output_paths = []
+        file_iter = tqdm(files, total=len(files), desc="Batch resample", unit="file")
+        for filename in file_iter:
+            file_iter.set_postfix_str(filename)
+            input_path = os.path.join(input_folder, filename)
+            output_path = os.path.join(output_folder, filename)
+
+            df = self._load_dataframe_from_path(input_path)
+            resampled_df = self._resample_dataframe(
+                df,
+                column_agg_map=column_agg_map,
+                frequency=frequency,
+                keep_columns=keep_columns,
+                datetime_candidates=[self.datetime_column_name, 'datetime', 'date'],
+            )
+            self._save_dataframe_to_path(resampled_df, output_path)
+            output_paths.append(output_path)
+            LOGGER.info("Resampled file saved: %s", output_path)
+
+        LOGGER.info("Batch resample completed: %d output file(s)", len(output_paths))
+
+        return output_paths
+
+    def to_geo_dataframe(self, output_path, lon_column=None, lat_column=None, crs='EPSG:4326'):
+        """
+        Export current in-situ data as a GeoDataFrame file.
+
+        File type is inferred from output_path extension.
+
+        Args:
+            output_path (str): Destination path, e.g. .parquet, .geojson, .gpkg, .shp.
+            lon_column (str or None): Longitude column name. If None, inferred.
+            lat_column (str or None): Latitude column name. If None, inferred.
+            crs (str): Coordinate reference system. Defaults to EPSG:4326.
+
+        Returns:
+            geopandas.GeoDataFrame: Exported GeoDataFrame.
+        """
+        df = self.data.get_dataframe().copy()
+        gdf = self._build_geodataframe_from_dataframe(
+            df,
+            lon_column=lon_column,
+            lat_column=lat_column,
+            crs=crs,
+        )
+
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            self.check_directory_existance(output_dir)
+
+        extension = os.path.splitext(output_path)[1].lower()
+        if extension in ('.parquet', '.pq', '.pqt'):
+            gdf.to_parquet(output_path, index=False)
+        elif extension in ('.geojson', '.json'):
+            gdf.to_file(output_path, driver='GeoJSON')
+        elif extension == '.gpkg':
+            gdf.to_file(output_path, driver='GPKG')
+        elif extension == '.shp':
+            gdf.to_file(output_path, driver='ESRI Shapefile')
+        else:
+            raise ValueError(
+                f"Unsupported geospatial output format '{extension}'. "
+                "Supported formats: .parquet, .geojson, .json, .gpkg, .shp"
+            )
+
+        LOGGER.info("GeoDataFrame exported: %s (%d rows)", output_path, len(gdf))
+        print(f"GeoDataFrame exported to {output_path}")
+        return gdf
+
+    def _build_geodataframe_from_dataframe(self, df, lon_column=None, lat_column=None, crs='EPSG:4326'):
+        columns = list(df.columns)
+        lower_to_original = {str(col).lower(): col for col in columns}
+
+        # If class-level lon/lat are provided as column names, prioritize them.
+        if lon_column is None and isinstance(self.lon, str):
+            lon_key = self.lon.lower()
+            if lon_key in lower_to_original:
+                lon_column = lower_to_original[lon_key]
+
+        if lat_column is None and isinstance(self.lat, str):
+            lat_key = self.lat.lower()
+            if lat_key in lower_to_original:
+                lat_column = lower_to_original[lat_key]
+
+        if lon_column is None:
+            for candidate in ('lon', 'longitude', 'x'):
+                if candidate in lower_to_original:
+                    lon_column = lower_to_original[candidate]
+                    break
+
+        if lat_column is None:
+            for candidate in ('lat', 'latitude', 'y'):
+                if candidate in lower_to_original:
+                    lat_column = lower_to_original[candidate]
+                    break
+
+        if lon_column is None or lat_column is None:
+            if not isinstance(self.lon, (int, float, np.number)) or not isinstance(self.lat, (int, float, np.number)):
+                raise ValueError(
+                    "Longitude/latitude columns were not found and class-level lon/lat are not numeric fallback coordinates."
+                )
+            lon_column = lon_column or 'lon'
+            lat_column = lat_column or 'lat'
+            df[lon_column] = float(self.lon)
+            df[lat_column] = float(self.lat)
+
+        df[lon_column] = pd.to_numeric(df[lon_column], errors='coerce')
+        df[lat_column] = pd.to_numeric(df[lat_column], errors='coerce')
+        df = df.dropna(subset=[lon_column, lat_column]).copy()
+
+        return gpd.GeoDataFrame(
+            df,
+            geometry=gpd.points_from_xy(df[lon_column], df[lat_column], crs=crs),
+            crs=crs,
+        )
+
+    def to_geo_dataframe_batch(self, input_folder, output_folder, prefix=None, lon_column=None, lat_column=None, crs='EPSG:4326', file_type='parquet'):
+        """
+        Convert all supported files in input_folder to GeoDataFrames and export them.
+
+        Args:
+            input_folder (str): Folder containing input tabular files.
+            output_folder (str): Destination folder for geospatial outputs.
+            prefix (str or None): If provided, process only files that start with prefix.
+            lon_column (str or None): Optional explicit longitude column name.
+            lat_column (str or None): Optional explicit latitude column name.
+            crs (str): Coordinate reference system. Defaults to EPSG:4326.
+            file_type (str): Export format for all output files.
+                Supported: parquet, geojson, json, gpkg, shp. Defaults to parquet.
+
+        Returns:
+            list: Output file paths generated.
+        """
+        if not os.path.isdir(input_folder):
+            raise ValueError(f"input_folder does not exist: {input_folder}")
+
+        self.check_directory_existance(output_folder)
+
+        supported_exts = {'.csv', '.xls', '.xlsx', '.json', '.parquet', '.pq', '.pqt', '.geojson', '.gpkg', '.shp'}
+        file_type_to_ext = {
+            'parquet': '.parquet',
+            '.parquet': '.parquet',
+            'pq': '.parquet',
+            '.pq': '.parquet',
+            'pqt': '.parquet',
+            '.pqt': '.parquet',
+            'geojson': '.geojson',
+            '.geojson': '.geojson',
+            'json': '.json',
+            '.json': '.json',
+            'gpkg': '.gpkg',
+            '.gpkg': '.gpkg',
+            'shp': '.shp',
+            '.shp': '.shp',
+        }
+        output_ext = file_type_to_ext.get(str(file_type).lower())
+        if output_ext is None:
+            raise ValueError(
+                f"Unsupported file_type '{file_type}'. "
+                "Supported: parquet, geojson, json, gpkg, shp"
+            )
+
+        files = []
+        for name in os.listdir(input_folder):
+            path = os.path.join(input_folder, name)
+            if not os.path.isfile(path):
+                continue
+            if prefix is not None and not name.startswith(prefix):
+                continue
+            if os.path.splitext(name)[1].lower() not in supported_exts:
+                continue
+            files.append(name)
+
+        files = sorted(files)
+        if len(files) == 0:
+            LOGGER.warning("No input files found for to_geo_dataframe_batch in %s with prefix=%s", input_folder, prefix)
+            return []
+
+        LOGGER.info(
+            "Starting GeoDataFrame batch export: %d file(s), prefix=%s, file_type=%s",
+            len(files),
+            prefix,
+            output_ext,
+        )
+
+        output_paths = []
+        file_iter = tqdm(files, total=len(files), desc="GeoDataFrame batch", unit="file")
+        for filename in file_iter:
+            file_iter.set_postfix_str(filename)
+            input_path = os.path.join(input_folder, filename)
+            output_name = os.path.splitext(filename)[0] + output_ext
+            output_path = os.path.join(output_folder, output_name)
+
+            df = self._load_dataframe_from_path(input_path)
+            gdf = self._build_geodataframe_from_dataframe(
+                df,
+                lon_column=lon_column,
+                lat_column=lat_column,
+                crs=crs,
+            )
+
+            if output_ext in ('.parquet', '.pq', '.pqt'):
+                gdf.to_parquet(output_path, index=False)
+            elif output_ext in ('.geojson', '.json'):
+                gdf.to_file(output_path, driver='GeoJSON')
+            elif output_ext == '.gpkg':
+                gdf.to_file(output_path, driver='GPKG')
+            elif output_ext == '.shp':
+                gdf.to_file(output_path, driver='ESRI Shapefile')
+            else:
+                raise ValueError(
+                    f"Unsupported geospatial output format '{output_ext}' for file '{filename}'."
+                )
+
+            output_paths.append(output_path)
+            LOGGER.info("GeoDataFrame file saved: %s", output_path)
+
+        LOGGER.info("GeoDataFrame batch export completed: %d output file(s)", len(output_paths))
+        return output_paths
 
     def recursive_fill(self, column_to_fill_name='ta', 
                               variable='ta', 
@@ -446,6 +938,7 @@ class ClimateFiller():
                               machine_learning_enabled=False,
                               train_ratio=1,
                               model_name='xgboost',
+                              export_dataset=False,
                               **kwargs
                               ):
         """
@@ -458,6 +951,7 @@ class ClimateFiller():
             latitude (float): The latitude coordinate to use for data retrieval. Defaults to 31.66749781.
             product (str): The data product to retrieve for filling missing values. Defaults to "era5_Land".
             machine_learning_enabled (bool): Whether to use machine learning techniques for filling missing values. Defaults to False.
+            export_dataset (bool): Whether to export the training dataset used for ML error modeling to artifact_folder. Defaults to False.
             backend (str or None): The backend to use for data retrieval. Defaults to None.
 
         Returns:
@@ -474,6 +968,7 @@ class ClimateFiller():
             'train_ratio': train_ratio,
             'model_name': model_name,
             'model_kwargs': kwargs,
+            'export_dataset': export_dataset,
         }
 
         # Use coordinates defined at class initialization.
@@ -522,7 +1017,7 @@ class ClimateFiller():
                     
                 indexes = []
                 indexes_source = self.data.get_dataframe().index if machine_learning_enabled else self.data.get_missing_data_indexes_in_column(column_to_fill_name)
-                for p in indexes_source:
+                for p in tqdm(indexes_source, desc="Collect timestamps", unit="ts"):
                     if isinstance(p, str) is True:
                         indexes.append(datetime.datetime.strptime(p, '%Y-%m-%d %H:%M:%S'))
                     else:
@@ -546,6 +1041,7 @@ class ClimateFiller():
                 )
                 if os.path.exists(source_cache_path):
                     print(f"Reusing cached source data from: {source_cache_path}")
+                    LOGGER.info("Source cache hit: %s", source_cache_path)
                     source_series = self._load_source_series_cache(source_cache_path)
                     self._fill_from_source_series(
                         column_to_fill_name,
@@ -564,7 +1060,7 @@ class ClimateFiller():
                 
                 if canonical_column_to_fill_name == 'ta':
                     
-                    for year in years:
+                    for year in tqdm(years, desc="Load ERA5 yearly cache", unit="year"):
                         data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
                         data.append_dataframe(data_year.dataframe)
                         
@@ -589,7 +1085,7 @@ class ClimateFiller():
                     
                 elif canonical_column_to_fill_name == 'rh':
                     
-                    for year in years:
+                    for year in tqdm(years, desc="Load ERA5 yearly cache", unit="year"):
                         data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
                         data.append_dataframe(data_year.dataframe)
                     data.reset_index()
@@ -614,7 +1110,7 @@ class ClimateFiller():
                     
                 elif canonical_column_to_fill_name == 'ws':
                     
-                    for year in years:
+                    for year in tqdm(years, desc="Load ERA5 yearly cache", unit="year"):
                         data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
                         data.append_dataframe(data_year.dataframe)
                     data.reset_index()
@@ -637,7 +1133,7 @@ class ClimateFiller():
                     
                 elif canonical_column_to_fill_name == 'rs':
                     
-                    for year in years:
+                    for year in tqdm(years, desc="Load ERA5 yearly cache", unit="year"):
                         data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
                         data.append_dataframe(data_year.dataframe)
                         
@@ -674,7 +1170,7 @@ class ClimateFiller():
                     print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
                 
                 elif canonical_column_to_fill_name == 'p':
-                    for year in years:
+                    for year in tqdm(years, desc="Load ERA5 yearly cache", unit="year"):
                         data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
                         data.append_dataframe(data_year.dataframe)
                         
@@ -742,6 +1238,7 @@ class ClimateFiller():
                 )
                 if os.path.exists(source_cache_path):
                     print(f"Reusing cached source data from: {source_cache_path}")
+                    LOGGER.info("Source cache hit: %s", source_cache_path)
                     source_series = self._load_source_series_cache(source_cache_path)
                     self._fill_from_source_series(
                         column_to_fill_name,
@@ -834,7 +1331,7 @@ class ClimateFiller():
 
                 indexes = []
                 indexes_source = self.data.get_dataframe().index if machine_learning_enabled else self.data.get_missing_data_indexes_in_column(column_to_fill_name)
-                for p in indexes_source:
+                for p in tqdm(indexes_source, desc="Collect timestamps", unit="ts"):
                     if isinstance(p, str) is True:
                         indexes.append(datetime.datetime.strptime(p, '%Y-%m-%d %H:%M:%S'))
                     else:
@@ -857,6 +1354,7 @@ class ClimateFiller():
                 )
                 if os.path.exists(source_cache_path):
                     print(f"Reusing cached source data from: {source_cache_path}")
+                    LOGGER.info("Source cache hit: %s", source_cache_path)
                     source_series = self._load_source_series_cache(source_cache_path)
                     self._fill_from_source_series(
                         column_to_fill_name,
@@ -1110,6 +1608,7 @@ class ClimateFiller():
                 )
                 if os.path.exists(source_cache_path):
                     print(f"Reusing cached source data from: {source_cache_path}")
+                    LOGGER.info("Source cache hit: %s", source_cache_path)
                     source_series = self._load_source_series_cache(source_cache_path)
                     self._fill_from_source_series(
                         column_to_fill_name,

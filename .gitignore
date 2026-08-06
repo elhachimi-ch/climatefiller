@@ -17,3 +17,5 @@ medgu_barcelone_ml_beat_hs_magnus.ipynb
 .env
 *.parquet
 *.txt
+*.json
+*.data
