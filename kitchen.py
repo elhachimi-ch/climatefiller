@@ -141,10 +141,35 @@ def main():
     ti = time.time()
     
     #data = DataFrame("data/oukaimeden_full_p_et0_bc.csv")
-    cf = ClimateFiller(r"data\r3_full_p_et0_bc.csv")
+    
+    data_path = r"C:\Users\celhac\Desktop\kitchen\projects\pythonsnippets\data\africa_noaa_hourly\climate_noaa_hourly_h_ALGERIA_603510-99999_2016-01-01_2016-12-31.csv"
+    cf = ClimateFiller(
+        data_path,
+        datetime_column_name='date',
+        lon=5.883,
+        lat=36.8
+        )
     #cf = ClimateFiller(r"C:\Users\elhac\OneDrive\Desktop\kitchen\projects\pythonsnippets\data\california\cimis_data.csv")
     
-    print(cf.climate_zones_classification())
+    cf.show()
+    
+    cf.impute(
+        't2m',
+        train_ratio=0.8,
+        
+    )
+    
+    # print(cf.climate_zones_classification())
+    
+    roi_path = r"C:\Users\celhac\OneDrive - The Hong Kong Polytechnic University\data\rois\tensift.parquet" 
+    
+    roi_africa_parquet_path = r"D:\chouaib\data\data\vectors\africa_roi.parquet"
+    # cf.list_in_situ_stations(
+    #     roi=roi_path,
+    #     start_date="2016-01-01",
+    #     end_date="2016-12-31",
+    #     export=True,
+    # )
 
     
    

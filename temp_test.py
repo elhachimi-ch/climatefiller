@@ -15,7 +15,7 @@ def main():
     data.rename_columns({'R3_Tair':'ta'}) 
 
     # Initilize the ClimateFiller object
-    climate_filler = ClimateFiller(data.get_dataframe(), data_type='df', datetime_column_name='DateBis')
+    climate_filler = ClimateFiller(data_path=data.get_dataframe(), datetime_column_name='DateBis')
 
     climate_filler.plot_column('ta')
 

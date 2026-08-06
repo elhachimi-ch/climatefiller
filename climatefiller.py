@@ -1,6 +1,9 @@
 from data_science_toolkit.dataframe import DataFrame
+from data_science_toolkit.model import Model
 import datetime
+import json
 import os
+import time
 from datetime import timedelta
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -18,23 +21,24 @@ from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor
 import numpy as np
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, train_test_split
+import geopandas as gpd
 
 
 class ClimateFiller():
     """The ClimateFiller class
     """
     
-    def __init__(self, data_link=None, data_type='csv', datetime_column_name='datetime', 
+    def __init__(self, data_path=None, datetime_column_name='datetime', 
                  datetime_format='%Y-%m-%d %H:%M:%S', backend='gee', 
-                 lat=31.65410805, lon=-7.603140831, tz_offset=-7, elevation=None, **kwargs):
+                 lat=31.65410805, lon=-7.603140831, tz_offset=-7, elevation=None,
+                 artifact_folder='climatefiller_artifact', **kwargs):
         """
         Initializes an instance of the class with the specified parameters.
 
         Args:
             self (object): The instance of the class.
-            data_link (str or None): A string representing the link or path to the data source. Defaults to None.
-            data_type (str): The type of the data source. Defaults to 'csv'.
+            data_path (str, os.PathLike, pandas.DataFrame, or None): Path to the data source or an in-memory dataframe. Defaults to None.
             datetime_column_name (str): The name of the column that contains datetime information. Defaults to 'datetime'.
             date_time_format (str): The format of the datetime values in the data source. Defaults to '%Y-%m-%d %H:%M:%S'.
             tz_offset (int): The time zone offset in hours comparint to GMT. Defaults to -7.
@@ -43,26 +47,44 @@ class ClimateFiller():
 
         Notes:
             - The initialization of the class instance allows for handling and processing of the data.
-            - The data_link parameter specifies the location of the data source, which can be a link or a local path.
-            - The data_type parameter indicates the format or type of the data source, with 'csv' as the default value.
+            - The data_path parameter specifies the location of the data source, which can be a link or a local path.
+            - The input data type is inferred from data_path extension (e.g., .csv, .xls, .xlsx, .json, .parquet).
             - The datetime_column_name parameter identifies the column in the data source that contains datetime information.
             - The date_time_format parameter defines the format of the datetime values in the data source.
-            - If data_link is not provided, the instance will be initialized without any data source.
+            - If data_path is not provided, the instance will be initialized without any data source.
         """
+        if data_path is None and 'data_link' in kwargs:
+            # Backward compatibility for old constructor calls.
+            data_path = kwargs.pop('data_link')
+
         self.datetime_column_name = datetime_column_name
         self.lat = lat
         self.lon = lon
         self.tz_offset = tz_offset
         self.elevation = elevation
         self.backend = backend
+        self.artifact_folder = artifact_folder
+        self.check_directory_existance(self.artifact_folder)
+        self._ml_impute_config = {
+            'train_ratio': 1,
+            'model_name': 'xgboost',
+            'model_kwargs': {}
+        }
         self.et0_output_data = DataFrame()
         if backend == 'gee':
-            ee.Initialize(project='climatefiller-427208')
-        if data_link is None:
+            gee_project = self._get_gee_project_name()
+            ee.Initialize(project=gee_project)
+        if data_path is None:
             self.data = DataFrame()
             
         else:
-            self.data = DataFrame(data_path=data_link, data_type=data_type, **kwargs)
+            inferred_data_type = self._infer_data_type(data_path)
+            self.data = DataFrame(data_path=data_path, data_type=inferred_data_type, **kwargs)
+            if datetime_column_name not in self.data.get_columns_names():
+                raise ValueError(
+                    f"please enter a valide datetime column name. '{datetime_column_name}' was not found. "
+                    f"Available columns: {self.data.get_columns_names()}"
+                )
             self.data.rename_columns({datetime_column_name:'datetime'})
             datetime_column_name = 'datetime'
             self.data.column_to_date(datetime_column_name, datetime_format)
@@ -70,6 +92,299 @@ class ClimateFiller():
             self.datetime_column_name = datetime_column_name
         
         self.data_reanalysis = DataFrame()
+
+    @staticmethod
+    def _infer_data_type(data_path):
+        if isinstance(data_path, pd.DataFrame):
+            return 'df'
+
+        if isinstance(data_path, (str, os.PathLike)):
+            extension = os.path.splitext(str(data_path))[1].lower()
+            extension_to_type = {
+                '.csv': 'csv',
+                '.xls': 'xls',
+                '.xlsx': 'xlsx',
+                '.json': 'json',
+                '.parquet': 'parquet',
+                '.pq': 'parquet',
+                '.pqt': 'parquet'
+            }
+            inferred = extension_to_type.get(extension)
+            if inferred is not None:
+                return inferred
+
+            raise ValueError(f"Unsupported data format '{extension}'.")
+
+        raise ValueError(
+            "Unsupported data_path type. Use a path string, os.PathLike, or pandas.DataFrame."
+        )
+
+    @staticmethod
+    def _get_gee_project_name():
+        env_candidates = [
+            os.getenv('GEE_PROJECT'),
+            os.getenv('EE_PROJECT'),
+            os.getenv('GOOGLE_EARTH_ENGINE_PROJECT')
+        ]
+        for value in env_candidates:
+            if value:
+                return value
+
+        env_files = [
+            os.path.join(os.getcwd(), '.env'),
+            os.path.join(os.path.dirname(__file__), '.env')
+        ]
+        keys = ('GEE_PROJECT', 'EE_PROJECT', 'GOOGLE_EARTH_ENGINE_PROJECT')
+        for env_file in env_files:
+            if not os.path.exists(env_file):
+                continue
+
+            with open(env_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    raw = line.strip()
+                    if not raw or raw.startswith('#') or '=' not in raw:
+                        continue
+                    key, value = raw.split('=', 1)
+                    key = key.strip()
+                    if key in keys:
+                        parsed = value.strip().strip('"').strip("'")
+                        if parsed:
+                            return parsed
+
+        raise ValueError(
+            "GEE project is not configured. Please define GEE_PROJECT in .env."
+        )
+
+    @staticmethod
+    def _as_timestamp(value):
+        if isinstance(value, str):
+            return pd.to_datetime(value)
+        return value
+
+    @staticmethod
+    def _build_error_features(index, source_values):
+        dt_index = pd.to_datetime(index)
+        src = pd.Series(source_values, index=dt_index).astype(float)
+        return pd.DataFrame(
+            {
+                'source_value': src.values,
+                'hour': dt_index.hour,
+                'day': dt_index.day,
+                'month': dt_index.month,
+                'dayofyear': dt_index.dayofyear,
+                'year': dt_index.year,
+            },
+            index=dt_index,
+        )
+
+    @staticmethod
+    def _resolve_model_type(model_name):
+        mapping = {
+            'xgboost': 'xb',
+            'xb': 'xb',
+            'random_forest': 'rf',
+            'rf': 'rf',
+            'decision_tree': 'dt',
+            'dt': 'dt',
+            'linear_regression': 'lr',
+            'lr': 'lr',
+            'knn': 'knn',
+            'gradient_boosting': 'gb',
+            'gb': 'gb',
+            'svm': 'svm',
+        }
+        model_type = mapping.get(str(model_name).lower())
+        if model_type is None:
+            raise ValueError(
+                f"Unsupported model_name '{model_name}'. "
+                "Supported values are: xgboost, random_forest, decision_tree, linear_regression, knn, gradient_boosting, svm"
+            )
+        return model_type
+
+    @staticmethod
+    def _format_coord_for_cache(value):
+        formatted = f"{float(value):.5f}"
+        return formatted.replace('-', 'm').replace('.', 'p')
+
+    def _build_source_cache_path(self, product, variable, lon, lat, start_datetime, end_datetime):
+        start_ts = pd.to_datetime(start_datetime).strftime('%Y%m%d%H%M%S')
+        end_ts = pd.to_datetime(end_datetime).strftime('%Y%m%d%H%M%S')
+        lon_key = self._format_coord_for_cache(lon)
+        lat_key = self._format_coord_for_cache(lat)
+        filename = (
+            f"impute_source_backend_{self.backend}_product_{product}_var_{variable}_"
+            f"lon_{lon_key}_lat_{lat_key}_start_{start_ts}_end_{end_ts}.csv"
+        )
+        return os.path.join('data', 'cache', filename)
+
+    @staticmethod
+    def _load_source_series_cache(cache_path):
+        cached = pd.read_csv(cache_path)
+        if 'datetime' in cached.columns:
+            cached['datetime'] = pd.to_datetime(cached['datetime'])
+            cached.set_index('datetime', inplace=True)
+        else:
+            first_col = cached.columns[0]
+            cached[first_col] = pd.to_datetime(cached[first_col])
+            cached.set_index(first_col, inplace=True)
+
+        if 'source_value' in cached.columns:
+            source_series = cached['source_value']
+        else:
+            source_series = cached.iloc[:, 0]
+
+        source_series = source_series[~source_series.index.duplicated(keep='first')].sort_index()
+        return source_series
+
+    @staticmethod
+    def _save_source_series_cache(source_series, cache_path):
+        source_series = source_series[~source_series.index.duplicated(keep='first')].sort_index()
+        cache_df = source_series.rename('source_value').to_frame()
+        cache_df.index.name = 'datetime'
+        cache_df.to_csv(cache_path)
+        print(f"Saved source cache to {cache_path}")
+
+    def _save_error_model_artifact(self, model, feature_columns, column_to_fill_name, product, model_name, performance):
+        model_artifact_name = f"{product}_{column_to_fill_name}_{model_name}_error_model.data"
+        model_artifact_path = os.path.join(self.artifact_folder, model_artifact_name)
+        model.save_model(model_artifact_path)
+
+        metadata_name = f"{product}_{column_to_fill_name}_{model_name}_error_model_meta.json"
+        metadata_path = os.path.join(self.artifact_folder, metadata_name)
+        metadata = {
+            'feature_columns': list(feature_columns),
+            'column_to_fill_name': column_to_fill_name,
+            'product': product,
+            'model_name': model_name,
+            'trained_at': datetime.datetime.utcnow().isoformat(),
+            'performance': performance,
+        }
+        with open(metadata_path, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2)
+        print(f"Saved ML artifact to {model_artifact_path}")
+        print(f"Saved ML metadata to {metadata_path}")
+
+    def _train_error_model(self, column_to_fill_name, source_series, product, train_ratio=1, model_name='xgboost', **model_kwargs):
+        source_series = source_series[~source_series.index.duplicated(keep='first')].sort_index()
+        insitu_series = self.data.get_dataframe()[column_to_fill_name]
+        train_df = pd.concat(
+            [
+                insitu_series.rename('insitu_value'),
+                source_series.rename('source_value')
+            ],
+            axis=1
+        ).dropna()
+
+        if train_df.shape[0] < 24:
+            print(
+                f"Insufficient overlap ({train_df.shape[0]} samples) to train ML error model for {column_to_fill_name}. "
+                "Using raw downloaded data for gap filling."
+            )
+            return None, None, None
+
+        X = self._build_error_features(train_df.index, train_df['source_value'])
+        y = train_df['insitu_value'] - train_df['source_value']
+        model_type = self._resolve_model_type(model_name)
+        train_ratio = float(train_ratio)
+        if train_ratio <= 0 or train_ratio > 1:
+            raise ValueError("train_ratio must be in (0, 1].")
+
+        start = time.perf_counter()
+        if train_ratio < 1:
+            x_train, x_test, y_train, y_test = train_test_split(
+                X,
+                y,
+                train_size=train_ratio,
+                test_size=1 - train_ratio,
+                random_state=42,
+            )
+        else:
+            x_train, y_train = X, y
+            x_test, y_test = None, None
+
+        try:
+            model = Model(
+                data_x=x_train,
+                data_y=y_train,
+                model_type=model_type,
+                task='r',
+                training_percent=1,
+                **model_kwargs,
+            )
+        except TypeError as e:
+            raise ValueError(f"Invalid kwargs for Model: {e}") from e
+
+        model.train()
+        training_time_sec = time.perf_counter() - start
+
+        performance = {
+            'training_time_sec': training_time_sec,
+            'train_ratio': train_ratio,
+            'rmse': None,
+            'r2': None,
+            'n_samples': int(len(X)),
+            'n_train': int(len(x_train)),
+            'n_test': int(len(x_test)) if x_test is not None else 0,
+        }
+
+        if x_test is not None and len(x_test) > 0:
+            y_pred = model.predict(x_test)
+            y_pred = np.squeeze(np.asarray(y_pred))
+            performance['rmse'] = float(np.sqrt(mean_squared_error(y_test, y_pred)))
+            performance['r2'] = float(r2_score(y_test, y_pred))
+
+        self._save_error_model_artifact(
+            model,
+            X.columns,
+            column_to_fill_name,
+            product,
+            model_name,
+            performance,
+        )
+        return model, list(X.columns), performance
+
+    def _fill_from_source_series(self, column_to_fill_name, source_series, product, machine_learning_enabled=False):
+        source_series = source_series[~source_series.index.duplicated(keep='first')].sort_index()
+        missing_indexes = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
+
+        if len(missing_indexes) == 0:
+            return
+
+        model = None
+        feature_columns = None
+        if machine_learning_enabled:
+            model, feature_columns, performance = self._train_error_model(
+                column_to_fill_name,
+                source_series,
+                product,
+                train_ratio=self._ml_impute_config.get('train_ratio', 1),
+                model_name=self._ml_impute_config.get('model_name', 'xgboost'),
+                **self._ml_impute_config.get('model_kwargs', {}),
+            )
+            if performance is not None:
+                print(
+                    f"ML performance for {column_to_fill_name}: "
+                    f"training_time_sec={performance['training_time_sec']:.3f}, "
+                    f"rmse={performance['rmse']}, r2={performance['r2']}"
+                )
+
+        for p in missing_indexes:
+            p_ts = self._as_timestamp(p)
+            if p_ts not in source_series.index:
+                continue
+
+            source_value = source_series.loc[p_ts]
+            if isinstance(source_value, pd.Series):
+                source_value = source_value.iloc[0]
+
+            filled_value = float(source_value)
+            if model is not None:
+                features = self._build_error_features([p_ts], [source_value])
+                features = features[feature_columns]
+                predicted_error = float(model.predict(features)[0])
+                filled_value = filled_value + predicted_error
+
+            self.data.set_row(column_to_fill_name, p, filled_value)
         
     def show(self, number_of_row=None):
         """
@@ -89,12 +404,12 @@ class ClimateFiller():
         """
         
         if number_of_row is None:
-            return self.data.get_dataframe()
+            return print(self.data.get_dataframe())
         elif number_of_row < 0:
-            return self.data.get_dataframe().tail(abs(number_of_row)) 
+            return print(self.data.get_dataframe().tail(abs(number_of_row)))
         else:
-            return self.data.get_dataframe().head(number_of_row)
-    
+            return print(self.data.get_dataframe().head(number_of_row))
+
     def recursive_fill(self, column_to_fill_name='ta', 
                               variable='ta', 
                               longitude=-7.593311291,
@@ -117,20 +432,21 @@ class ClimateFiller():
         elif self.missing_data_checking(column_to_fill_name) > 1000:
             import numpy as np
             data_chuncks = np.array_split(self.data.get_dataframe(), 2)
-            return DataFrame(ClimateFiller(data_chuncks[0], data_type='df').fill(column_to_fill_name,
+            return DataFrame(ClimateFiller(data_path=data_chuncks[0]).fill(column_to_fill_name,
                                                                                  variable,
                                                                                  latitude,
-                                                                                 longitude), data_type='df').append_dataframe(ClimateFiller(data_chuncks[1], data_type='df').fill(
+                                                                                 longitude), data_type='df').append_dataframe(ClimateFiller(data_path=data_chuncks[1]).fill(
                                                                                  column_to_fill_name,
                                                                                  variable,
                                                                                  latitude,
                                                                                  longitude))
     
-    def fill(self, column_to_fill_name='ta', 
-                              lon=-7.593311291,
-                              lat=31.66749781,
+    def impute(self, column_to_fill_name='ta', 
                               product="era5_land",
                               machine_learning_enabled=False,
+                              train_ratio=1,
+                              model_name='xgboost',
+                              **kwargs
                               ):
         """
         Fills missing values in the specified column using data retrieval and optionally machine learning techniques.
@@ -154,25 +470,59 @@ class ClimateFiller():
             - If the backend is not specified, the method will use the default backend associated with the class.
             - The effectiveness of the filling process may depend on the data availability and the chosen backend.
         """
+        self._ml_impute_config = {
+            'train_ratio': train_ratio,
+            'model_name': model_name,
+            'model_kwargs': kwargs,
+        }
+
+        # Use coordinates defined at class initialization.
+        # Keep backward compatibility for legacy calls passing lon/lat through kwargs.
+        lon = kwargs.pop('lon', self.lon)
+        lat = kwargs.pop('lat', self.lat)
+        self._ml_impute_config['model_kwargs'] = kwargs
+
+        canonical_column_to_fill_name = {
+            't2m': 'ta',
+            'temperature_2m': 'ta',
+            'tp': 'p',
+            'precipitation': 'p',
+        }.get(column_to_fill_name, column_to_fill_name)
+
+        missing_count = self.missing_data_checking(column_to_fill_name, verbose=False)
+        total_rows = self.data.get_shape()[0]
+        missing_percent = round((missing_count / total_rows) * 100, 2) if total_rows > 0 else 0
+        print(
+            "Missing data statistic for {}: {} missing value(s) out of {} rows ({}%).".format(
+                column_to_fill_name,
+                missing_count,
+                total_rows,
+                missing_percent,
+            )
+        )
+
         if self.backend == 'gee':
-            if self.missing_data_checking(column_to_fill_name, verbose=False) == 0:
+            if missing_count == 0:
                 print('No missing data found in ' + column_to_fill_name)
                 return
             
             if product=='era5_land':
-                if column_to_fill_name == 'ta':
+                if canonical_column_to_fill_name == 'ta':
                     era5_land_variables = ['temperature_2m']
-                elif column_to_fill_name == 'rh':
+                elif canonical_column_to_fill_name == 'rh':
                     era5_land_variables = ['temperature_2m', 'dewpoint_temperature_2m']
-                elif column_to_fill_name == 'rs':
+                elif canonical_column_to_fill_name == 'rs':
                     era5_land_variables = ['surface_solar_radiation_downwards']
-                elif column_to_fill_name == 'ws':
+                elif canonical_column_to_fill_name == 'ws':
                     era5_land_variables = ['u_component_of_wind_10m', 'v_component_of_wind_10m']
-                elif column_to_fill_name == 'p':
+                elif canonical_column_to_fill_name == 'p':
                     era5_land_variables = ['total_precipitation']
+                else:
+                    raise ValueError(f"Invalid column_to_fill_name: {column_to_fill_name}")
                     
                 indexes = []
-                for p in self.data.get_missing_data_indexes_in_column(column_to_fill_name):
+                indexes_source = self.data.get_dataframe().index if machine_learning_enabled else self.data.get_missing_data_indexes_in_column(column_to_fill_name)
+                for p in indexes_source:
                     if isinstance(p, str) is True:
                         indexes.append(datetime.datetime.strptime(p, '%Y-%m-%d %H:%M:%S'))
                     else:
@@ -184,14 +534,35 @@ class ClimateFiller():
                 missing_data_dates = {}    
                 years = list(years)
                 years.sort()
+                range_start = min(indexes)
+                range_end = max(indexes)
+                source_cache_path = self._build_source_cache_path(
+                    product,
+                    canonical_column_to_fill_name,
+                    lon,
+                    lat,
+                    range_start,
+                    range_end,
+                )
+                if os.path.exists(source_cache_path):
+                    print(f"Reusing cached source data from: {source_cache_path}")
+                    source_series = self._load_source_series_cache(source_cache_path)
+                    self._fill_from_source_series(
+                        column_to_fill_name,
+                        source_series,
+                        product,
+                        machine_learning_enabled,
+                    )
+                    print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
+                    return
                 print("Found missing data for {} in year(s): {}".format(column_to_fill_name, years))  
-                self.download_era5_land_data_by_years(era5_land_variables, lon, lat, datetime.datetime(min(years), 1, 1), datetime.datetime(max(years), 12, 31))
+                self.download_era5_land_data_by_years(era5_land_variables, datetime.datetime(min(years), 1, 1), datetime.datetime(max(years), 12, 31))
                             
                 from data_science_toolkit.gis import GIS
                 gis = GIS()
                 data = DataFrame()
                 
-                if column_to_fill_name == 'ta':
+                if canonical_column_to_fill_name == 'ta':
                     
                     for year in years:
                         data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
@@ -201,34 +572,22 @@ class ClimateFiller():
                     data.reset_index()
                     data.column_to_date('datetime')
                     data.reindex_dataframe("datetime")
-                    data.sort()
+                    data.set_dataframe(data.get_dataframe().sort_index())
                     data.missing_data('t2m')
                     data.transform_column('t2m', lambda o: o - 273.15)
-                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
                     data.drop_duplicated_indexes()
-                    
-                    if machine_learning_enabled:
-                        self.best_ml_model(column_to_fill_name, lon, lat, product)
-                        
-                        for p in nan_indices:
-                            print(self.data_reanalysis.get_row(p))
-                            prediction = self.best_model.predict(self.data_reanalysis.get_row(p).values[0].reshape(1, -1))
-                            self.data.set_row('ta', p, prediction)
-                                
-                        """for p in nan_indices:
-                            if not df.loc[df['datetime'] == p, column_to_fill_name].empty:
-                                prediction = self.best_model.predict(df.loc[df['datetime'] == p, column_to_fill_name].values[0].reshape(1, -1))
-                                self.data.set_row(column_to_fill_name, p, prediction)"""
-                    else:
-                        for p in nan_indices:
-                            try:
-                                self.data.set_row('ta', p, data.get_row(p)['t2m'])
-                            except KeyError as e:
-                                print(f'Data about {p} not found in ERA5-Land')
+
+                    self._fill_from_source_series(
+                        column_to_fill_name,
+                        data.get_dataframe()['t2m'],
+                        product,
+                        machine_learning_enabled,
+                    )
+                    self._save_source_series_cache(data.get_dataframe()['t2m'], source_cache_path)
                             
                     print('Imputation of missing data for ta from ERA5-Land was done!')
                     
-                elif column_to_fill_name == 'rh':
+                elif canonical_column_to_fill_name == 'rh':
                     
                     for year in years:
                         data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
@@ -243,13 +602,17 @@ class ClimateFiller():
                     data.transform_column('d2m', lambda o: o - 273.15)
                     data.add_column_based_on_function('era5_hr', lambda row: Lib.relative_humidity_magnus(row['t2m'], row['d2m']))
                     data.missing_data('era5_hr')
-                    nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
-                    for p in nan_indices:
-                        self.data.set_row('rh', p, data.get_row(p)['era5_hr'])
+                    self._fill_from_source_series(
+                        column_to_fill_name,
+                        data.get_dataframe()['era5_hr'],
+                        product,
+                        machine_learning_enabled,
+                    )
+                    self._save_source_series_cache(data.get_dataframe()['era5_hr'], source_cache_path)
                     
                     print('Imputation of missing data for rh from ERA5-Land was done!')
                     
-                elif column_to_fill_name == 'ws':
+                elif canonical_column_to_fill_name == 'ws':
                     
                     for year in years:
                         data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
@@ -260,15 +623,19 @@ class ClimateFiller():
                     data.rename_columns({'u_component_of_wind_10m': 'u10', 'v_component_of_wind_10m': 'v10'})
                   
                     data.add_column_based_on_function('era5_ws', lambda row: Lib.logarithmic_wind_profile(row['u10'], row['v10']))
-                    nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
                     data.missing_data('u10')
                     data.missing_data('era5_ws')
-                    for p in nan_indices:
-                        self.data.set_row('ws', p, data.get_row(p)['era5_ws'])
+                    self._fill_from_source_series(
+                        column_to_fill_name,
+                        data.get_dataframe()['era5_ws'],
+                        product,
+                        machine_learning_enabled,
+                    )
+                    self._save_source_series_cache(data.get_dataframe()['era5_ws'], source_cache_path)
                     
                     print('Imputation of missing data for wind speed from ERA5-Land was done!')
                     
-                elif column_to_fill_name == 'rs':
+                elif canonical_column_to_fill_name == 'rs':
                     
                     for year in years:
                         data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
@@ -296,13 +663,17 @@ class ClimateFiller():
                     data.rename_columns({'rs': 'ssrd'})
                     
                     data.transform_column('ssrd', lambda o : o if abs(o) < 1500 else 0 )    
-                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
-                    for p in nan_indices:
-                        self.data.set_row('rs', p, data.get_row(p)['ssrd'])
+                    self._fill_from_source_series(
+                        column_to_fill_name,
+                        data.get_dataframe()['ssrd'],
+                        product,
+                        machine_learning_enabled,
+                    )
+                    self._save_source_series_cache(data.get_dataframe()['ssrd'], source_cache_path)
                 
                     print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
                 
-                elif column_to_fill_name == 'p':
+                elif canonical_column_to_fill_name == 'p':
                     for year in years:
                         data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
                         data.append_dataframe(data_year.dataframe)
@@ -312,7 +683,7 @@ class ClimateFiller():
                     data.reset_index()
                     data.column_to_date('datetime')
                     data.reindex_dataframe("datetime")
-                    data.sort()
+                    data.set_dataframe(data.get_dataframe().sort_index())
                     data.missing_data('tp')
                     nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
                     data.drop_duplicated_indexes()
@@ -334,9 +705,13 @@ class ClimateFiller():
                     data.keep_columns(['p'])
                     data.rename_columns({'p': 'tp'})
                     
-                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
-                    for p in nan_indices:
-                        self.data.set_row('p', p, data.get_row(p)['tp'])
+                    self._fill_from_source_series(
+                        column_to_fill_name,
+                        data.get_dataframe()['tp'],
+                        product,
+                        machine_learning_enabled,
+                    )
+                    self._save_source_series_cache(data.get_dataframe()['tp'], source_cache_path)
                 
                     print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
                 
@@ -346,16 +721,37 @@ class ClimateFiller():
                     'rh': 'RH2M',
                     'ws': 'WS2M',
                     'rs': 'ALLSKY_SFC_SW_DWN',
+                    'p': 'PRECTOTCORR',
                     'pr': 'PRECTOTCORR',
                     'wd': 'WD2M'
                 }
 
-                if column_to_fill_name not in merra2_variables:
+                if canonical_column_to_fill_name not in merra2_variables:
                     print(f'Invalid column_to_fill_name: {column_to_fill_name}')
                     return
 
                 start = self.data.get_dataframe().index[0]
                 end = self.data.get_dataframe().index[-1]
+                source_cache_path = self._build_source_cache_path(
+                    product,
+                    canonical_column_to_fill_name,
+                    lon,
+                    lat,
+                    start,
+                    end,
+                )
+                if os.path.exists(source_cache_path):
+                    print(f"Reusing cached source data from: {source_cache_path}")
+                    source_series = self._load_source_series_cache(source_cache_path)
+                    self._fill_from_source_series(
+                        column_to_fill_name,
+                        source_series,
+                        product,
+                        machine_learning_enabled,
+                    )
+                    self.data.index_to_column()
+                    print('Imputation of missing data for ' + column_to_fill_name + ' from MERRA2 was done.')
+                    return
                 start = datetime.datetime.strftime(start, '%Y%m%d')
                 end = datetime.datetime.strftime(end, '%Y%m%d')
 
@@ -370,7 +766,7 @@ class ClimateFiller():
                     'latitude': lat,
                     'longitude': lon,
                     'community': community,
-                    'parameters': merra2_variables[column_to_fill_name],
+                    'parameters': merra2_variables[canonical_column_to_fill_name],
                     'format': format,
                     'user': 'ysouidi1',
                     'header': 'true',
@@ -384,26 +780,21 @@ class ClimateFiller():
                     return None
 
                 data_merra = response.json()
-                result = data_merra['properties']['parameter'][merra2_variables[column_to_fill_name]]
+                result = data_merra['properties']['parameter'][merra2_variables[canonical_column_to_fill_name]]
                 df = pd.DataFrame(result.items(), columns=['datetime', column_to_fill_name])
                 df['datetime'] = pd.to_datetime(df['datetime'], format='%Y%m%d%H')
 
-                nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
-
-                if len(nan_indices) == 0:
+                if len(self.data.get_missing_data_indexes_in_column(column_to_fill_name)) == 0:
                     return
 
-                if machine_learning_enabled:
-                    self.best_ml_model(column_to_fill_name, lon, lat, product)
-                    for p in nan_indices:
-                        if not df.loc[df['datetime'] == p, column_to_fill_name].empty:
-                            prediction = self.best_model.predict(df.loc[df['datetime'] == p, column_to_fill_name].values[0].reshape(1, -1))
-                            self.data.set_row(column_to_fill_name, p, prediction)
-                else:
-                    for p in nan_indices:
-                        corresponding_row = df[df['datetime'] == p][column_to_fill_name]
-                        if not corresponding_row.empty:
-                            self.data.set_row(column_to_fill_name, p, df.loc[df['datetime'] == p, column_to_fill_name].values[0])
+                source_series = df.set_index('datetime')[column_to_fill_name]
+                self._fill_from_source_series(
+                    column_to_fill_name,
+                    source_series,
+                    product,
+                    machine_learning_enabled,
+                )
+                self._save_source_series_cache(source_series, source_cache_path)
 
                 self.data.index_to_column()
                 print('Imputation of missing data for ' + column_to_fill_name + ' from MERRA2 was done.')
@@ -415,21 +806,23 @@ class ClimateFiller():
         
             pass
         else:
-            if self.missing_data_checking(column_to_fill_name, verbose=False) == 0:
+            if missing_count == 0:
                 print('No missing data found in ' + column_to_fill_name)
                 return
             
             if product=='era5_land':
-                if column_to_fill_name == 'ta':
+                if canonical_column_to_fill_name == 'ta':
                     era5_land_variables = ['2m_temperature']
-                elif column_to_fill_name == 'rh':
+                elif canonical_column_to_fill_name == 'rh':
                     era5_land_variables = ['2m_temperature', '2m_dewpoint_temperature']
-                elif column_to_fill_name == 'rs':
+                elif canonical_column_to_fill_name == 'rs':
                     era5_land_variables = ['surface_solar_radiation_downwards']
-                elif column_to_fill_name == 'ws':
+                elif canonical_column_to_fill_name == 'ws':
                     era5_land_variables = ['10m_u_component_of_wind', '10m_v_component_of_wind']
-                elif column_to_fill_name == 'p':
+                elif canonical_column_to_fill_name == 'p':
                     era5_land_variables = ['total_precipitation']
+                else:
+                    raise ValueError(f"Invalid column_to_fill_name: {column_to_fill_name}")
                     
                     
                 from data_science_toolkit.gis import GIS
@@ -440,7 +833,8 @@ class ClimateFiller():
                     self.data.reindex_dataframe(self.datetime_column_name)"""
 
                 indexes = []
-                for p in self.data.get_missing_data_indexes_in_column(column_to_fill_name):
+                indexes_source = self.data.get_dataframe().index if machine_learning_enabled else self.data.get_missing_data_indexes_in_column(column_to_fill_name)
+                for p in indexes_source:
                     if isinstance(p, str) is True:
                         indexes.append(datetime.datetime.strptime(p, '%Y-%m-%d %H:%M:%S'))
                     else:
@@ -451,6 +845,27 @@ class ClimateFiller():
                     years.add(p.year)     
                 missing_data_dates = {}    
                 years = list(years)
+                range_start = min(indexes)
+                range_end = max(indexes)
+                source_cache_path = self._build_source_cache_path(
+                    product,
+                    canonical_column_to_fill_name,
+                    lon,
+                    lat,
+                    range_start,
+                    range_end,
+                )
+                if os.path.exists(source_cache_path):
+                    print(f"Reusing cached source data from: {source_cache_path}")
+                    source_series = self._load_source_series_cache(source_cache_path)
+                    self._fill_from_source_series(
+                        column_to_fill_name,
+                        source_series,
+                        product,
+                        machine_learning_enabled,
+                    )
+                    print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
+                    return
                 print("Found missing data for {} in year(s): {}".format(column_to_fill_name, years))  
                 for y in years:
                     missing_data_dict = {}
@@ -496,7 +911,7 @@ class ClimateFiller():
                 gis = GIS()
                 data = DataFrame()
                 
-                if column_to_fill_name == 'ta':
+                if canonical_column_to_fill_name == 'ta':
                     for year in missing_data_dates:
                         for month in missing_data_dates[year]['month']:
                             data_month_path = 'data\era5land_' + column_to_fill_name + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
@@ -505,34 +920,21 @@ class ClimateFiller():
                     data.reset_index()
                     data.column_to_date('valid_time')
                     data.reindex_dataframe("valid_time")
-                    data.sort()
+                    data.set_dataframe(data.get_dataframe().sort_index())
                     data.missing_data('t2m')
                     data.transform_column('t2m', lambda o: o - 273.15)
-                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
                     data.drop_duplicated_indexes()
-                    
-                    if machine_learning_enabled:
-                        self.best_ml_model(column_to_fill_name, lon, lat, product)
-                        
-                        for p in nan_indices:
-                            print(self.data_reanalysis.get_row(p))
-                            prediction = self.best_model.predict(self.data_reanalysis.get_row(p).values[0].reshape(1, -1))
-                            self.data.set_row('ta', p, prediction)
-                                
-                        """for p in nan_indices:
-                            if not df.loc[df['datetime'] == p, column_to_fill_name].empty:
-                                prediction = self.best_model.predict(df.loc[df['datetime'] == p, column_to_fill_name].values[0].reshape(1, -1))
-                                self.data.set_row(column_to_fill_name, p, prediction)"""
-                    else:
-                        for p in nan_indices:
-                            try:
-                                self.data.set_row('ta', p, data.get_row(p)['t2m'])
-                            except KeyError as e:
-                                print(f'Data about {p} not found in ERA5-Land')
+                    self._fill_from_source_series(
+                        column_to_fill_name,
+                        data.get_dataframe()['t2m'],
+                        product,
+                        machine_learning_enabled,
+                    )
+                    self._save_source_series_cache(data.get_dataframe()['t2m'], source_cache_path)
                             
                     print('Imputation of missing data for ta from ERA5-Land was done!')
                     
-                elif column_to_fill_name == 'rh':
+                elif canonical_column_to_fill_name == 'rh':
                     data_t2m = DataFrame()
                     data_d2m = DataFrame()
                     
@@ -560,13 +962,17 @@ class ClimateFiller():
                     data.add_column_based_on_function('era5_hr', lambda row: Lib.get_relative_humidity(row['t2m', 'd2m']))
                     #data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
                     data.missing_data('era5_hr')
-                    nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
-                    for p in nan_indices:
-                        self.data.set_row('rh', p, data.get_row(p)['era5_hr'])
+                    self._fill_from_source_series(
+                        column_to_fill_name,
+                        data.get_dataframe()['era5_hr'],
+                        product,
+                        machine_learning_enabled,
+                    )
+                    self._save_source_series_cache(data.get_dataframe()['era5_hr'], source_cache_path)
                     
                     print('Imputation of missing data for rh from ERA5-Land was done!')
                     
-                elif column_to_fill_name == 'ws':
+                elif canonical_column_to_fill_name == 'ws':
                     data_u10 = DataFrame()
                     data_v10 = DataFrame()
                     for year in missing_data_dates:
@@ -587,15 +993,19 @@ class ClimateFiller():
                     data_v10.join(data_u10.get_dataframe())
                     data = data_v10
                     data.add_column_based_on_function('era5_ws', Lib.get_2m_wind_speed)
-                    nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
                     data.missing_data('u10')
                     data.missing_data('era5_ws')
-                    for p in nan_indices:
-                        self.data.set_row('ws', p, data.get_row(p)['era5_ws'])
+                    self._fill_from_source_series(
+                        column_to_fill_name,
+                        data.get_dataframe()['era5_ws'],
+                        product,
+                        machine_learning_enabled,
+                    )
+                    self._save_source_series_cache(data.get_dataframe()['era5_ws'], source_cache_path)
                     
                     print('Imputation of missing data for wind speed from ERA5-Land was done!')
                     
-                elif column_to_fill_name == 'rs':
+                elif canonical_column_to_fill_name == 'rs':
                     for year in missing_data_dates:
                         for month in missing_data_dates[year]['month']:
                             data_month_path = 'data\era5land_' + 'surface_solar_radiation_downwards' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
@@ -621,13 +1031,17 @@ class ClimateFiller():
                     data.rename_columns({'rs': 'ssrd'})
                     
                     data.transform_column('ssrd', lambda o : o if abs(o) < 1500 else 0 )    
-                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
-                    for p in nan_indices:
-                        self.data.set_row('rs', p, data.get_row(p)['ssrd'])
+                    self._fill_from_source_series(
+                        column_to_fill_name,
+                        data.get_dataframe()['ssrd'],
+                        product,
+                        machine_learning_enabled,
+                    )
+                    self._save_source_series_cache(data.get_dataframe()['ssrd'], source_cache_path)
                 
                     print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
                 
-                elif column_to_fill_name == 'p':
+                elif canonical_column_to_fill_name == 'p':
                     for year in missing_data_dates:
                         for month in missing_data_dates[year]['month']:
                             data_month_path = 'data\era5land_' + 'total_precipitation' + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
@@ -637,7 +1051,7 @@ class ClimateFiller():
                     data.reset_index()
                     data.column_to_date('valid_time')
                     data.reindex_dataframe("valid_time")
-                    data.sort()
+                    data.set_dataframe(data.get_dataframe().sort_index())
                     data.missing_data('tp')
                     nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
                     data.drop_duplicated_indexes()
@@ -659,9 +1073,13 @@ class ClimateFiller():
                     data.keep_columns(['p'])
                     data.rename_columns({'p': 'tp'})
                     
-                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
-                    for p in nan_indices:
-                        self.data.set_row('p', p, data.get_row(p)['tp'])
+                    self._fill_from_source_series(
+                        column_to_fill_name,
+                        data.get_dataframe()['tp'],
+                        product,
+                        machine_learning_enabled,
+                    )
+                    self._save_source_series_cache(data.get_dataframe()['tp'], source_cache_path)
                 
                     print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
                 
@@ -671,16 +1089,37 @@ class ClimateFiller():
                     'rh': 'RH2M',
                     'ws': 'WS2M',
                     'rs': 'ALLSKY_SFC_SW_DWN',
+                    'p': 'PRECTOTCORR',
                     'pr': 'PRECTOTCORR',
                     'wd': 'WD2M'
                 }
 
-                if column_to_fill_name not in merra2_variables:
+                if canonical_column_to_fill_name not in merra2_variables:
                     print(f'Invalid column_to_fill_name: {column_to_fill_name}')
                     return
 
                 start = self.data.get_dataframe().index[0]
                 end = self.data.get_dataframe().index[-1]
+                source_cache_path = self._build_source_cache_path(
+                    product,
+                    canonical_column_to_fill_name,
+                    lon,
+                    lat,
+                    start,
+                    end,
+                )
+                if os.path.exists(source_cache_path):
+                    print(f"Reusing cached source data from: {source_cache_path}")
+                    source_series = self._load_source_series_cache(source_cache_path)
+                    self._fill_from_source_series(
+                        column_to_fill_name,
+                        source_series,
+                        product,
+                        machine_learning_enabled,
+                    )
+                    self.data.index_to_column()
+                    print('Imputation of missing data for ' + column_to_fill_name + ' from MERRA2 was done.')
+                    return
                 start = datetime.datetime.strftime(start, '%Y%m%d')
                 end = datetime.datetime.strftime(end, '%Y%m%d')
 
@@ -695,7 +1134,7 @@ class ClimateFiller():
                     'latitude': lat,
                     'longitude': lon,
                     'community': community,
-                    'parameters': merra2_variables[column_to_fill_name],
+                    'parameters': merra2_variables[canonical_column_to_fill_name],
                     'format': format,
                     'user': 'ysouidi1',
                     'header': 'true',
@@ -709,26 +1148,21 @@ class ClimateFiller():
                     return None
 
                 data_merra = response.json()
-                result = data_merra['properties']['parameter'][merra2_variables[column_to_fill_name]]
+                result = data_merra['properties']['parameter'][merra2_variables[canonical_column_to_fill_name]]
                 df = pd.DataFrame(result.items(), columns=['datetime', column_to_fill_name])
                 df['datetime'] = pd.to_datetime(df['datetime'], format='%Y%m%d%H')
 
-                nan_indices = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
-
-                if len(nan_indices) == 0:
+                if len(self.data.get_missing_data_indexes_in_column(column_to_fill_name)) == 0:
                     return
 
-                if machine_learning_enabled:
-                    self.best_ml_model(column_to_fill_name, lon, lat, product)
-                    for p in nan_indices:
-                        if not df.loc[df['datetime'] == p, column_to_fill_name].empty:
-                            prediction = self.best_model.predict(df.loc[df['datetime'] == p, column_to_fill_name].values[0].reshape(1, -1))
-                            self.data.set_row(column_to_fill_name, p, prediction)
-                else:
-                    for p in nan_indices:
-                        corresponding_row = df[df['datetime'] == p][column_to_fill_name]
-                        if not corresponding_row.empty:
-                            self.data.set_row(column_to_fill_name, p, df.loc[df['datetime'] == p, column_to_fill_name].values[0])
+                source_series = df.set_index('datetime')[column_to_fill_name]
+                self._fill_from_source_series(
+                    column_to_fill_name,
+                    source_series,
+                    product,
+                    machine_learning_enabled,
+                )
+                self._save_source_series_cache(source_series, source_cache_path)
 
                 self.data.index_to_column()
                 print('Imputation of missing data for ' + column_to_fill_name + ' from MERRA2 was done.')
@@ -1827,6 +2261,3581 @@ class ClimateFiller():
         results_df = pd.DataFrame(yearly_df)
         
         return results_df, results
+    
+    
+    @staticmethod
+    def _load_noaa_country_names(timeout=60):
+        """Return sorted NOAA country names from country-list.txt (uppercase)."""
+        url = "https://www.ncei.noaa.gov/pub/data/noaa/country-list.txt"
+        resp = requests.get(url, timeout=timeout)
+        resp.raise_for_status()
+        names = []
+        for line in resp.text.splitlines():
+            raw = line.rstrip("\n")
+            if not raw or raw.upper().startswith("FIPS"):
+                continue
+            # Format: "AA          ARUBA"
+            parts = raw.split(None, 1)
+            if len(parts) < 2:
+                continue
+            name = parts[1].strip().upper()
+            if name:
+                names.append(name)
+        return sorted(set(names))
+
+    @classmethod
+    def _infer_noaa_countries_from_roi(cls, roi, bbox=None, roi_geometry=None, timeout=60, verbose=False):
+        """
+        Infer NOAA ``nearest_stations_noaa`` country name(s) from an ROI.
+
+        Intersects the ROI with Natural Earth admin-0 countries and maps names
+        onto NOAA's country-list.txt (exact uppercase match, then aliases).
+        """
+        from shapely.geometry import box as shapely_box
+
+        if bbox is None:
+            bbox = cls._roi_to_bbox_list(roi)
+        if bbox is None:
+            raise ValueError("Could not resolve bbox from roi for country inference.")
+        min_lon, min_lat, max_lon, max_lat = bbox
+
+        if roi_geometry is None:
+            if isinstance(roi, str):
+                ext = os.path.splitext(roi)[1].lower()
+                if ext == ".parquet":
+                    roi_gdf = gpd.read_parquet(roi)
+                else:
+                    roi_gdf = gpd.read_file(roi)
+                if roi_gdf.crs is None or roi_gdf.crs.to_epsg() != 4326:
+                    roi_gdf = roi_gdf.to_crs(epsg=4326)
+                roi_geometry = roi_gdf.unary_union
+            else:
+                roi_geometry = shapely_box(min_lon, min_lat, max_lon, max_lat)
+
+        # Natural Earth 110m countries (small download, cached by GDAL/fiona where possible)
+        ne_url = (
+            "https://naciscdn.org/naturalearth/110m/cultural/"
+            "ne_110m_admin_0_countries.zip"
+        )
+        try:
+            world = gpd.read_file(ne_url)
+        except Exception as exc:
+            raise RuntimeError(
+                "Could not load Natural Earth countries to infer country from ROI. "
+                f"Details: {exc}"
+            ) from exc
+
+        if world.crs is None or world.crs.to_epsg() != 4326:
+            world = world.to_crs(epsg=4326)
+
+        name_col = None
+        for cand in ("NAME", "ADMIN", "NAME_EN", "name", "admin"):
+            if cand in world.columns:
+                name_col = cand
+                break
+        if name_col is None:
+            raise RuntimeError(
+                "Natural Earth countries layer has no recognizable country-name column."
+            )
+
+        try:
+            hit = world[world.intersects(roi_geometry)].copy()
+        except Exception:
+            # Fallback for invalid/self-intersecting ROI geometries
+            hit = world[world.intersects(roi_geometry.buffer(0))].copy()
+
+        if hit.empty:
+            # Last resort: country containing ROI center
+            center = shapely_box(min_lon, min_lat, max_lon, max_lat).centroid
+            hit = world[world.contains(center)].copy()
+        if hit.empty:
+            raise RuntimeError(
+                "Could not infer any country from ROI. "
+                "Pass a clearer ROI or check that it intersects land."
+            )
+
+        noaa_names = cls._load_noaa_country_names(timeout=timeout)
+        noaa_set = set(noaa_names)
+
+        # Common Natural Earth → NOAA name differences
+        aliases = {
+            "UNITED STATES OF AMERICA": "UNITED STATES",
+            "UNITED STATES OF AMERICA (THE)": "UNITED STATES",
+            "RUSSIAN FEDERATION": "RUSSIA",
+            "RUSSIA": "RUSSIA",
+            "SOUTH KOREA": "KOREA SOUTH",
+            "NORTH KOREA": "KOREA NORTH",
+            "REPUBLIC OF KOREA": "KOREA SOUTH",
+            "DEMOCRATIC PEOPLE'S REPUBLIC OF KOREA": "KOREA NORTH",
+            "CZECHIA": "CZECH REPUBLIC",
+            "ESWATINI": "SWAZILAND",
+            "NORTH MACEDONIA": "MACEDONIA",
+            "MYANMAR": "BURMA",
+            "VIET NAM": "VIETNAM",
+            "SYRIA": "SYRIA",
+            "SYRIAN ARAB REPUBLIC": "SYRIA",
+            "IRAN": "IRAN",
+            "IRAN (ISLAMIC REPUBLIC OF)": "IRAN",
+            "TANZANIA": "TANZANIA",
+            "UNITED REPUBLIC OF TANZANIA": "TANZANIA",
+            "BOLIVIA": "BOLIVIA",
+            "BOLIVIA (PLURINATIONAL STATE OF)": "BOLIVIA",
+            "VENEZUELA": "VENEZUELA",
+            "VENEZUELA (BOLIVARIAN REPUBLIC OF)": "VENEZUELA",
+            "MOLDOVA": "MOLDOVA",
+            "REPUBLIC OF MOLDOVA": "MOLDOVA",
+            "LAOS": "LAOS",
+            "LAO PEOPLE'S DEMOCRATIC REPUBLIC": "LAOS",
+            "BRUNEI": "BRUNEI",
+            "BRUNEI DARUSSALAM": "BRUNEI",
+            "DEMOCRATIC REPUBLIC OF THE CONGO": "CONGO DEMOCRATIC REPUBLIC",
+            "DEMOCRATIC REPUBLIC OF CONGO": "CONGO DEMOCRATIC REPUBLIC",
+            "CONGO": "CONGO",
+            "REPUBLIC OF THE CONGO": "CONGO",
+            "IVORY COAST": "COTE D'IVOIRE",
+            "CÔTE D'IVOIRE": "COTE D'IVOIRE",
+            "COTE D'IVOIRE": "COTE D'IVOIRE",
+            "CAPE VERDE": "CAPE VERDE",
+            "CABO VERDE": "CAPE VERDE",
+            "GAMBIA": "GAMBIA THE",
+            "THE GAMBIA": "GAMBIA THE",
+            "BAHAMAS": "BAHAMAS THE",
+            "THE BAHAMAS": "BAHAMAS THE",
+            "UNITED KINGDOM": "UNITED KINGDOM",
+            "UNITED KINGDOM OF GREAT BRITAIN AND NORTHERN IRELAND": "UNITED KINGDOM",
+            "CENTRAL AFRICAN REPUBLIC": "CENTRAL AFRICAN REPUBLIC",
+            "SOUTH SUDAN": "SOUTH SUDAN",
+            "EQ. GUINEA": "EQUATORIAL GUINEA",
+            "EQUATORIAL GUINEA": "EQUATORIAL GUINEA",
+            "W. SAHARA": "WESTERN SAHARA",
+            "WESTERN SAHARA": "WESTERN SAHARA",
+            "S. SUDAN": "SOUTH SUDAN",
+            "BOSNIA AND HERZ.": "BOSNIA AND HERZEGOVINA",
+            "BOSNIA AND HERZEGOVINA": "BOSNIA AND HERZEGOVINA",
+            "DOMINICAN REP.": "DOMINICAN REPUBLIC",
+            "SOLOMON IS.": "SOLOMON ISLANDS",
+            "N. CYPRUS": "CYPRUS",
+            "E. TIMOR": "EAST TIMOR",
+            "TIMOR-LESTE": "EAST TIMOR",
+            "SÃO TOMÉ AND PRINCIPE": "SAO TOME AND PRINCIPE",
+            "SAO TOME AND PRINCIPE": "SAO TOME AND PRINCIPE",
+        }
+
+        def _to_noaa(name):
+            key = str(name).strip().upper()
+            if not key:
+                return None
+            if key in noaa_set:
+                return key
+            mapped = aliases.get(key)
+            if mapped and mapped in noaa_set:
+                return mapped
+            # Loose contains match (prefer shortest NOAA name that contains / is contained)
+            candidates = [
+                n for n in noaa_names
+                if key in n or n in key
+            ]
+            if candidates:
+                return sorted(candidates, key=len)[0]
+            return None
+
+        inferred = []
+        unmatched = []
+        for raw_name in hit[name_col].astype(str).tolist():
+            mapped = _to_noaa(raw_name)
+            if mapped:
+                inferred.append(mapped)
+            else:
+                unmatched.append(raw_name)
+
+        inferred = sorted(set(inferred))
+        if not inferred:
+            raise RuntimeError(
+                "ROI intersects land but no Natural Earth country name could be "
+                "mapped to NOAA country-list.txt. Unmatched: "
+                f"{sorted(set(unmatched))}"
+            )
+
+        if verbose:
+            print(
+                f"[list_in_situ_stations] Inferred {len(inferred)} NOAA country(ies) "
+                f"from ROI: {', '.join(inferred)}"
+            )
+            if unmatched:
+                print(
+                    "[list_in_situ_stations] Warning: unmatched Natural Earth names "
+                    f"(skipped): {sorted(set(unmatched))}"
+                )
+        return inferred
+
+    def list_in_situ_stations(
+        self,
+        roi,
+        start_date,
+        end_date,
+        *,
+        no_of_stations=None,
+        timeout=120,
+        export=False,
+        output_file="data/in_situ/climate_station_report.txt",
+        verbose=True,
+    ):
+        """
+        List available NOAA ISD in-situ stations for an ROI and date range.
+
+        Downloads NOAA ``isd-history.csv`` (same catalog used by R
+        ``climate::nearest_stations_noaa``), filters stations by ROI
+        (bbox and optional polygon) and by operation-period overlap with
+        ``start_date``/``end_date``. No R / Rscript installation is required.
+
+        Countries intersecting the ROI are inferred for metadata only; spatial
+        filtering is done directly against the ROI.
+
+        Parameters
+        ----------
+        roi : list | tuple | str
+            Bounding box [min_lon, min_lat, max_lon, max_lat] or vector file path.
+        start_date : str
+            Start date (YYYY-MM-DD) used for availability overlap filtering.
+        end_date : str
+            End date (YYYY-MM-DD) used for availability overlap filtering.
+        no_of_stations : int | None, optional
+            If set, keep only the N stations nearest to the ROI center.
+            If None (default), keep all stations inside the ROI.
+        timeout : int | float, optional
+            HTTP timeout in seconds for NOAA catalog downloads.
+        export : bool, optional
+            If True, export a text report to ``output_file`` and a GeoParquet
+            stations file alongside it (``*_stations.parquet``, EPSG:4326).
+        output_file : str, optional
+            Text report path used when ``export=True``. The stations GeoParquet
+            is written with the same base name and ``_stations.parquet`` suffix.
+        verbose : bool, optional
+            Print progress and summary logs.
+
+        Returns
+        -------
+        dict
+            {
+              "source": "NOAA-ISD",
+              "countries": list[str],
+              "bbox": [min_lon, min_lat, max_lon, max_lat],
+              "start_date": str,
+              "end_date": str,
+              "stations_count": int,
+              "stations": list[dict],
+              "report_file": str | None,
+              "stations_parquet_file": str | None,
+            }
+        """
+        from io import StringIO
+
+        if roi is None:
+            raise ValueError("roi is required and must be a bbox or vector file path.")
+        if not start_date or not end_date:
+            raise ValueError("start_date and end_date are required.")
+        if no_of_stations is not None and int(no_of_stations) < 1:
+            raise ValueError("no_of_stations must be >= 1 when provided.")
+
+        bbox = self._roi_to_bbox_list(roi)
+        if bbox is None:
+            raise ValueError("Could not resolve bbox from roi.")
+        min_lon, min_lat, max_lon, max_lat = bbox
+        center_lon = (min_lon + max_lon) / 2.0
+        center_lat = (min_lat + max_lat) / 2.0
+
+        start_dt = pd.to_datetime(start_date, errors="coerce")
+        end_dt = pd.to_datetime(end_date, errors="coerce")
+        if pd.isna(start_dt) or pd.isna(end_dt):
+            raise ValueError("start_date and end_date must be valid dates in YYYY-MM-DD format.")
+        if start_dt > end_dt:
+            raise ValueError("start_date must be <= end_date.")
+
+        roi_geometry = None
+        if isinstance(roi, str):
+            try:
+                ext = os.path.splitext(roi)[1].lower()
+                if ext == ".parquet":
+                    roi_gdf = gpd.read_parquet(roi)
+                else:
+                    roi_gdf = gpd.read_file(roi)
+                if roi_gdf.crs is None or roi_gdf.crs.to_epsg() != 4326:
+                    roi_gdf = roi_gdf.to_crs(epsg=4326)
+                roi_geometry = roi_gdf.unary_union
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Could not read roi vector geometry for polygon filtering: {exc}"
+                ) from exc
+
+        countries = []
+        try:
+            countries = self._infer_noaa_countries_from_roi(
+                roi=roi,
+                bbox=bbox,
+                roi_geometry=roi_geometry,
+                timeout=timeout,
+                verbose=verbose,
+            )
+        except Exception as exc:
+            if verbose:
+                print(
+                    f"[list_in_situ_stations] Warning: could not infer countries "
+                    f"from ROI ({exc}). Continuing with spatial filter only."
+                )
+
+        if verbose:
+            print("[list_in_situ_stations] Downloading NOAA ISD station catalog ...")
+
+        isd_url = "https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv"
+        try:
+            resp = requests.get(isd_url, timeout=timeout)
+            resp.raise_for_status()
+            stations_df = pd.read_csv(StringIO(resp.text))
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to download NOAA ISD history catalog from {isd_url}: {exc}"
+            ) from exc
+
+        if stations_df.empty:
+            if verbose:
+                print("[list_in_situ_stations] NOAA ISD catalog is empty.")
+            return {
+                "source": "NOAA-ISD",
+                "countries": countries,
+                "bbox": bbox,
+                "start_date": str(start_date),
+                "end_date": str(end_date),
+                "stations_count": 0,
+                "stations": [],
+                "report_file": None,
+                "stations_parquet_file": None,
+            }
+
+        # Attach human-readable country names from NOAA country-list when possible.
+        try:
+            cl_url = "https://www.ncei.noaa.gov/pub/data/noaa/country-list.txt"
+            cl_resp = requests.get(cl_url, timeout=timeout)
+            cl_resp.raise_for_status()
+            rows = []
+            for line in cl_resp.text.splitlines():
+                raw = line.rstrip("\n")
+                if not raw or raw.upper().startswith("FIPS"):
+                    continue
+                parts = raw.split(None, 1)
+                if len(parts) < 2:
+                    continue
+                rows.append({"CTRY": parts[0].strip(), "COUNTRY": parts[1].strip().upper()})
+            country_df = pd.DataFrame(rows)
+            if "CTRY" in stations_df.columns and not country_df.empty:
+                stations_df = stations_df.merge(country_df, on="CTRY", how="left")
+        except Exception as exc:
+            if verbose:
+                print(
+                    f"[list_in_situ_stations] Warning: could not join NOAA country "
+                    f"names ({exc})."
+                )
+
+        columns_lower = {c.lower(): c for c in stations_df.columns}
+        lon_col = columns_lower.get("lon")
+        lat_col = columns_lower.get("lat")
+        begin_col = columns_lower.get("begin")
+        end_col = columns_lower.get("end")
+
+        if lon_col is None or lat_col is None:
+            raise RuntimeError(
+                "NOAA ISD catalog is missing coordinate columns (expected LON/LAT). "
+                f"Columns: {list(stations_df.columns)}"
+            )
+
+        stations_df[lon_col] = pd.to_numeric(stations_df[lon_col], errors="coerce")
+        stations_df[lat_col] = pd.to_numeric(stations_df[lat_col], errors="coerce")
+        stations_df = stations_df.dropna(subset=[lon_col, lat_col]).copy()
+
+        # Filter by bbox first.
+        stations_df = stations_df[
+            (stations_df[lon_col] >= min_lon)
+            & (stations_df[lon_col] <= max_lon)
+            & (stations_df[lat_col] >= min_lat)
+            & (stations_df[lat_col] <= max_lat)
+        ].copy()
+
+        # Optional polygon clipping when roi is vector geometry.
+        if roi_geometry is not None and not stations_df.empty:
+            points_gdf = gpd.GeoDataFrame(
+                stations_df,
+                geometry=gpd.points_from_xy(
+                    stations_df[lon_col], stations_df[lat_col], crs="EPSG:4326"
+                ),
+                crs="EPSG:4326",
+            )
+            inside_mask = points_gdf.intersects(roi_geometry)
+            stations_df = points_gdf.loc[inside_mask].drop(columns=["geometry"]).copy()
+
+        # Filter by station operation period overlap with requested range.
+        if begin_col is not None and end_col is not None and not stations_df.empty:
+            begin_dt = pd.to_datetime(
+                stations_df[begin_col].astype(str), format="%Y%m%d", errors="coerce"
+            )
+            end_dt_col = pd.to_datetime(
+                stations_df[end_col].astype(str), format="%Y%m%d", errors="coerce"
+            )
+            # Fallback for already-ISO strings
+            bad_begin = begin_dt.isna() & stations_df[begin_col].notna()
+            bad_end = end_dt_col.isna() & stations_df[end_col].notna()
+            if bad_begin.any():
+                begin_dt.loc[bad_begin] = pd.to_datetime(
+                    stations_df.loc[bad_begin, begin_col], errors="coerce"
+                )
+            if bad_end.any():
+                end_dt_col.loc[bad_end] = pd.to_datetime(
+                    stations_df.loc[bad_end, end_col], errors="coerce"
+                )
+
+            overlap_mask = (
+                begin_dt.notna()
+                & end_dt_col.notna()
+                & (begin_dt <= end_dt)
+                & (end_dt_col >= start_dt)
+            )
+            stations_df = stations_df.loc[overlap_mask].copy()
+
+        # Optional nearest-N selection relative to ROI center.
+        if no_of_stations is not None and not stations_df.empty:
+            # Approximate km distance (same scale factor used by climate R package).
+            dist = (
+                ((stations_df[lon_col] - center_lon) ** 2)
+                + ((stations_df[lat_col] - center_lat) ** 2)
+            ) ** 0.5 * 112.196672
+            stations_df = stations_df.assign(distance_km=dist)
+            stations_df = (
+                stations_df.sort_values("distance_km", ascending=True)
+                .head(int(no_of_stations))
+                .copy()
+            )
+
+        stations_df = stations_df.reset_index(drop=True)
+        stations_records = stations_df.to_dict(orient="records")
+
+        report_file = None
+        stations_parquet_file = None
+        if export:
+            folder = os.path.dirname(output_file)
+            if folder:
+                os.makedirs(folder, exist_ok=True)
+
+            if hasattr(datetime, "datetime"):
+                timestamp_utc = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+            else:
+                timestamp_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+            name_col = columns_lower.get("station name") or columns_lower.get("name")
+            usaf_col = columns_lower.get("usaf")
+            wban_col = columns_lower.get("wban")
+            ctry_col = columns_lower.get("country") or columns_lower.get("ctry")
+            begin_name = begin_col
+            end_name = end_col
+
+            lines = [
+                "NOAA ISD In-Situ Station Discovery Report",
+                "=" * 42,
+                f"Generated: {timestamp_utc}",
+                "Source: NOAA ISD history (isd-history.csv)",
+                f"BBox [min_lon,min_lat,max_lon,max_lat]: {bbox}",
+                f"Date range: {start_date} -> {end_date}",
+                f"Countries inferred from ROI: {', '.join(countries) if countries else 'none'}",
+                f"Stations found: {len(stations_records)}",
+                "",
+                "Available Stations:",
+            ]
+            if stations_records:
+                for row in stations_records:
+                    usaf = row.get(usaf_col) if usaf_col else None
+                    wban = row.get(wban_col) if wban_col else None
+                    sname = row.get(name_col) if name_col else None
+                    lat = row.get(lat_col)
+                    lon = row.get(lon_col)
+                    ctry = row.get(ctry_col) if ctry_col else None
+                    begin_v = row.get(begin_name) if begin_name else None
+                    end_v = row.get(end_name) if end_name else None
+                    sid = f"{usaf}-{wban}" if usaf is not None or wban is not None else "unknown"
+                    lines.append(
+                        f"- {sid} | name={sname} | country={ctry} | "
+                        f"lat={lat} | lon={lon} | begin={begin_v} | end={end_v}"
+                    )
+            else:
+                lines.append("- None")
+
+            with open(output_file, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
+            report_file = output_file
+
+            parquet_root, _ = os.path.splitext(output_file)
+            stations_parquet_file = f"{parquet_root}_stations.parquet"
+            try:
+                stations_gdf = gpd.GeoDataFrame(
+                    stations_df.copy(),
+                    geometry=gpd.points_from_xy(
+                        stations_df[lon_col],
+                        stations_df[lat_col],
+                        crs="EPSG:4326",
+                    ),
+                    crs="EPSG:4326",
+                )
+                stations_gdf.to_parquet(stations_parquet_file, index=False)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to export in-situ stations parquet: {stations_parquet_file} ({exc})"
+                ) from exc
+
+        if verbose:
+            print(f"[list_in_situ_stations] Stations found: {len(stations_records)}")
+            if report_file:
+                print(f"[list_in_situ_stations] Report exported to: {report_file}")
+            if stations_parquet_file:
+                print(
+                    f"[list_in_situ_stations] Stations parquet exported to: "
+                    f"{stations_parquet_file}"
+                )
+
+        return {
+            "source": "NOAA-ISD",
+            "countries": countries,
+            "bbox": bbox,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "stations_count": len(stations_records),
+            "stations": stations_records,
+            "report_file": report_file,
+            "stations_parquet_file": stations_parquet_file,
+        }
+
+
+    @staticmethod
+    def _roi_to_bbox_list(roi):
+        """Return [min_lon, min_lat, max_lon, max_lat] from a bbox list/tuple or vector file path.
+        Returns None when roi is None (no spatial filter)."""
+        if roi is None:
+            return None
+        if isinstance(roi, (list, tuple)) and len(roi) == 4 and all(isinstance(v, (int, float)) for v in roi):
+            return list(roi)
+        if isinstance(roi, str):
+            import geopandas as gpd
+            ext = os.path.splitext(roi)[1].lower()
+            if ext == ".parquet":
+                gdf = gpd.read_parquet(roi)
+            else:
+                gdf = gpd.read_file(roi)
+            if gdf.crs is None or gdf.crs.to_epsg() != 4326:
+                gdf = gdf.to_crs(epsg=4326)
+            minx, miny, maxx, maxy = gdf.total_bounds
+            return [float(minx), float(miny), float(maxx), float(maxy)]
+        raise TypeError(f"roi must be a bbox list/tuple or a file path string, got {type(roi)}")
+
+    @staticmethod
+    def _load_noaa_country_names(timeout=60):
+        """Return sorted NOAA country names from country-list.txt (uppercase)."""
+        url = "https://www.ncei.noaa.gov/pub/data/noaa/country-list.txt"
+        resp = requests.get(url, timeout=timeout)
+        resp.raise_for_status()
+        names = []
+        for line in resp.text.splitlines():
+            raw = line.rstrip("\n")
+            if not raw or raw.upper().startswith("FIPS"):
+                continue
+            # Format: "AA          ARUBA"
+            parts = raw.split(None, 1)
+            if len(parts) < 2:
+                continue
+            name = parts[1].strip().upper()
+            if name:
+                names.append(name)
+        return sorted(set(names))
+
+    @classmethod
+    def _infer_noaa_countries_from_roi(cls, roi, bbox=None, roi_geometry=None, timeout=60, verbose=False):
+        """
+        Infer NOAA ``nearest_stations_noaa`` country name(s) from an ROI.
+
+        Intersects the ROI with Natural Earth admin-0 countries and maps names
+        onto NOAA's country-list.txt (exact uppercase match, then aliases).
+        """
+        from shapely.geometry import box as shapely_box
+
+        if bbox is None:
+            bbox = cls._roi_to_bbox_list(roi)
+        if bbox is None:
+            raise ValueError("Could not resolve bbox from roi for country inference.")
+        min_lon, min_lat, max_lon, max_lat = bbox
+
+        if roi_geometry is None:
+            if isinstance(roi, str):
+                ext = os.path.splitext(roi)[1].lower()
+                if ext == ".parquet":
+                    roi_gdf = gpd.read_parquet(roi)
+                else:
+                    roi_gdf = gpd.read_file(roi)
+                if roi_gdf.crs is None or roi_gdf.crs.to_epsg() != 4326:
+                    roi_gdf = roi_gdf.to_crs(epsg=4326)
+                roi_geometry = roi_gdf.unary_union
+            else:
+                roi_geometry = shapely_box(min_lon, min_lat, max_lon, max_lat)
+
+        # Natural Earth 110m countries (small download, cached by GDAL/fiona where possible)
+        ne_url = (
+            "https://naciscdn.org/naturalearth/110m/cultural/"
+            "ne_110m_admin_0_countries.zip"
+        )
+        try:
+            world = gpd.read_file(ne_url)
+        except Exception as exc:
+            raise RuntimeError(
+                "Could not load Natural Earth countries to infer country from ROI. "
+                f"Details: {exc}"
+            ) from exc
+
+        if world.crs is None or world.crs.to_epsg() != 4326:
+            world = world.to_crs(epsg=4326)
+
+        name_col = None
+        for cand in ("NAME", "ADMIN", "NAME_EN", "name", "admin"):
+            if cand in world.columns:
+                name_col = cand
+                break
+        if name_col is None:
+            raise RuntimeError(
+                "Natural Earth countries layer has no recognizable country-name column."
+            )
+
+        try:
+            hit = world[world.intersects(roi_geometry)].copy()
+        except Exception:
+            # Fallback for invalid/self-intersecting ROI geometries
+            hit = world[world.intersects(roi_geometry.buffer(0))].copy()
+
+        if hit.empty:
+            # Last resort: country containing ROI center
+            center = shapely_box(min_lon, min_lat, max_lon, max_lat).centroid
+            hit = world[world.contains(center)].copy()
+        if hit.empty:
+            raise RuntimeError(
+                "Could not infer any country from ROI. "
+                "Pass a clearer ROI or check that it intersects land."
+            )
+
+        noaa_names = cls._load_noaa_country_names(timeout=timeout)
+        noaa_set = set(noaa_names)
+
+        # Common Natural Earth → NOAA name differences
+        aliases = {
+            "UNITED STATES OF AMERICA": "UNITED STATES",
+            "UNITED STATES OF AMERICA (THE)": "UNITED STATES",
+            "RUSSIAN FEDERATION": "RUSSIA",
+            "RUSSIA": "RUSSIA",
+            "SOUTH KOREA": "KOREA SOUTH",
+            "NORTH KOREA": "KOREA NORTH",
+            "REPUBLIC OF KOREA": "KOREA SOUTH",
+            "DEMOCRATIC PEOPLE'S REPUBLIC OF KOREA": "KOREA NORTH",
+            "CZECHIA": "CZECH REPUBLIC",
+            "ESWATINI": "SWAZILAND",
+            "NORTH MACEDONIA": "MACEDONIA",
+            "MYANMAR": "BURMA",
+            "VIET NAM": "VIETNAM",
+            "SYRIA": "SYRIA",
+            "SYRIAN ARAB REPUBLIC": "SYRIA",
+            "IRAN": "IRAN",
+            "IRAN (ISLAMIC REPUBLIC OF)": "IRAN",
+            "TANZANIA": "TANZANIA",
+            "UNITED REPUBLIC OF TANZANIA": "TANZANIA",
+            "BOLIVIA": "BOLIVIA",
+            "BOLIVIA (PLURINATIONAL STATE OF)": "BOLIVIA",
+            "VENEZUELA": "VENEZUELA",
+            "VENEZUELA (BOLIVARIAN REPUBLIC OF)": "VENEZUELA",
+            "MOLDOVA": "MOLDOVA",
+            "REPUBLIC OF MOLDOVA": "MOLDOVA",
+            "LAOS": "LAOS",
+            "LAO PEOPLE'S DEMOCRATIC REPUBLIC": "LAOS",
+            "BRUNEI": "BRUNEI",
+            "BRUNEI DARUSSALAM": "BRUNEI",
+            "DEMOCRATIC REPUBLIC OF THE CONGO": "CONGO DEMOCRATIC REPUBLIC",
+            "DEMOCRATIC REPUBLIC OF CONGO": "CONGO DEMOCRATIC REPUBLIC",
+            "CONGO": "CONGO",
+            "REPUBLIC OF THE CONGO": "CONGO",
+            "IVORY COAST": "COTE D'IVOIRE",
+            "CÔTE D'IVOIRE": "COTE D'IVOIRE",
+            "COTE D'IVOIRE": "COTE D'IVOIRE",
+            "CAPE VERDE": "CAPE VERDE",
+            "CABO VERDE": "CAPE VERDE",
+            "GAMBIA": "GAMBIA THE",
+            "THE GAMBIA": "GAMBIA THE",
+            "BAHAMAS": "BAHAMAS THE",
+            "THE BAHAMAS": "BAHAMAS THE",
+            "UNITED KINGDOM": "UNITED KINGDOM",
+            "UNITED KINGDOM OF GREAT BRITAIN AND NORTHERN IRELAND": "UNITED KINGDOM",
+            "CENTRAL AFRICAN REPUBLIC": "CENTRAL AFRICAN REPUBLIC",
+            "SOUTH SUDAN": "SOUTH SUDAN",
+            "EQ. GUINEA": "EQUATORIAL GUINEA",
+            "EQUATORIAL GUINEA": "EQUATORIAL GUINEA",
+            "W. SAHARA": "WESTERN SAHARA",
+            "WESTERN SAHARA": "WESTERN SAHARA",
+            "S. SUDAN": "SOUTH SUDAN",
+            "BOSNIA AND HERZ.": "BOSNIA AND HERZEGOVINA",
+            "BOSNIA AND HERZEGOVINA": "BOSNIA AND HERZEGOVINA",
+            "DOMINICAN REP.": "DOMINICAN REPUBLIC",
+            "SOLOMON IS.": "SOLOMON ISLANDS",
+            "N. CYPRUS": "CYPRUS",
+            "E. TIMOR": "EAST TIMOR",
+            "TIMOR-LESTE": "EAST TIMOR",
+            "SÃO TOMÉ AND PRINCIPE": "SAO TOME AND PRINCIPE",
+            "SAO TOME AND PRINCIPE": "SAO TOME AND PRINCIPE",
+        }
+
+        def _to_noaa(name):
+            key = str(name).strip().upper()
+            if not key:
+                return None
+            if key in noaa_set:
+                return key
+            mapped = aliases.get(key)
+            if mapped and mapped in noaa_set:
+                return mapped
+            # Loose contains match (prefer shortest NOAA name that contains / is contained)
+            candidates = [
+                n for n in noaa_names
+                if key in n or n in key
+            ]
+            if candidates:
+                return sorted(candidates, key=len)[0]
+            return None
+
+        inferred = []
+        unmatched = []
+        for raw_name in hit[name_col].astype(str).tolist():
+            mapped = _to_noaa(raw_name)
+            if mapped:
+                inferred.append(mapped)
+            else:
+                unmatched.append(raw_name)
+
+        inferred = sorted(set(inferred))
+        if not inferred:
+            raise RuntimeError(
+                "ROI intersects land but no Natural Earth country name could be "
+                "mapped to NOAA country-list.txt. Unmatched: "
+                f"{sorted(set(unmatched))}"
+            )
+
+        if verbose:
+            print(
+                f"[list_in_situ_stations] Inferred {len(inferred)} NOAA country(ies) "
+                f"from ROI: {', '.join(inferred)}"
+            )
+            if unmatched:
+                print(
+                    "[list_in_situ_stations] Warning: unmatched Natural Earth names "
+                    f"(skipped): {sorted(set(unmatched))}"
+                )
+        return inferred
+    
+    @staticmethod
+    def _climate_station_id(usaf, wban):
+        """Build climate-style NOAA ISH station id: ``USAF-WBAN`` (zero-padded)."""
+        if usaf in (None, "") or wban in (None, ""):
+            return None
+        try:
+            usaf_i = int(float(str(usaf).strip()))
+            wban_i = int(float(str(wban).strip()))
+        except Exception:
+            return None
+        return f"{usaf_i:06d}-{wban_i:05d}"
+
+    @staticmethod
+    def _climate_safe_token(value, default="unknown"):
+        tok = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value if value not in (None, "") else default)).strip("_")
+        return tok or default
+
+    @staticmethod
+    def _usaf_to_wmo(usaf):
+        """Map ISD USAF id to WMO block used by Ogimet / Wyoming (best-effort)."""
+        try:
+            usaf_i = int(float(str(usaf).strip()))
+        except Exception:
+            return None
+        s = f"{usaf_i:06d}"
+        # Many WMO stations are stored as WWWWW0 in USAF.
+        if s.endswith("0") and len(s) == 6:
+            return int(s[:-1])
+        return usaf_i
+
+    @staticmethod
+    def _native_climate_interval(source):
+        """Return (interval_name, short_label) for each climate source's native cadence."""
+        src = str(source).strip().lower()
+        native = {
+            "noaa_hourly": ("hourly", "h"),
+            "ogimet": ("hourly", "h"),
+            "noaa_co2": ("monthly", "m"),
+            "sounding_wyoming": ("sounding", "sounding"),
+            "imgw": ("hourly", "h"),
+        }
+        if src not in native:
+            raise ValueError(f"Unknown source for native interval: {source!r}")
+        return native[src]
+
+    @staticmethod
+    def _rh_august_roche_magnus(t_c, td_c):
+        """
+        Relative humidity [%] from air temperature and dewpoint (°C) using the
+        August–Roche–Magnus approximation (Alduchov & Eskridge 1996 constants):
+
+            e_s(T) = 6.1094 * exp(17.625 * T / (T + 243.04))
+            RH    = 100 * e_s(Td) / e_s(T)
+                  = 100 * exp(γ(Td) - γ(T))
+            γ(T)  = 17.625 * T / (T + 243.04)
+        """
+        t = pd.to_numeric(t_c, errors="coerce")
+        td = pd.to_numeric(td_c, errors="coerce")
+        a = 17.625
+        b = 243.04
+        # Avoid division by zero at T = -b (physically unreachable for air temps)
+        denom_t = b + t
+        denom_td = b + td
+        gamma_t = np.where(np.isfinite(denom_t) & (denom_t != 0), (a * t) / denom_t, np.nan)
+        gamma_td = np.where(np.isfinite(denom_td) & (denom_td != 0), (a * td) / denom_td, np.nan)
+        rh = 100.0 * np.exp(gamma_td - gamma_t)
+        rh = np.asarray(rh, dtype="float64")
+        rh[~np.isfinite(rh)] = np.nan
+        rh = np.clip(rh, 0.0, 100.0)
+        return rh
+
+    @classmethod
+    def _attach_estimated_rh(cls, df, *, column="rh"):
+        """
+        Add August–Roche–Magnus RH [%] from temperature / dewpoint columns.
+
+        Looks for ``t2m``+``dpt2m`` first (NOAA / Ogimet synop), then common
+        aliases. Returns ``df`` unchanged when those columns are missing.
+        """
+        if df is None or df.empty:
+            return df
+
+        lower = {str(c).strip().lower(): c for c in df.columns}
+
+        def _pick(*names):
+            for n in names:
+                if n in lower:
+                    return lower[n]
+            return None
+
+        t_col = _pick("t2m", "tc", "ta", "temp", "temperature", "t (c)", "t(c)")
+        td_col = _pick("dpt2m", "tdc", "td", "dewpoint", "dew_point", "td (c)", "td(c)")
+        if t_col is None or td_col is None:
+            return df
+
+        out = df.copy()
+        out[column] = cls._rh_august_roche_magnus(out[t_col], out[td_col])
+        return out
+
+    @staticmethod
+    def _expected_native_observation_rows(
+        source,
+        start_date,
+        end_date,
+        *,
+        sounding_hours=(0, 12),
+    ):
+        """Expected observation rows for the date window at the source native cadence."""
+        start_dt = pd.to_datetime(start_date).normalize()
+        end_dt = pd.to_datetime(end_date).normalize()
+        if pd.isna(start_dt) or pd.isna(end_dt) or end_dt < start_dt:
+            return 0
+        n_days = int((end_dt - start_dt).days) + 1
+        src = str(source).strip().lower()
+        if src in {"noaa_hourly", "ogimet", "imgw"}:
+            return n_days * 24
+        if src == "noaa_co2":
+            return (
+                (end_dt.year - start_dt.year) * 12
+                + (end_dt.month - start_dt.month)
+                + 1
+            )
+        if src == "sounding_wyoming":
+            hours = tuple(sounding_hours) if sounding_hours is not None else (0, 12)
+            return n_days * max(1, len(hours))
+        return n_days
+
+    @staticmethod
+    def _count_csv_data_rows(file_path):
+        """Count non-header data lines in a CSV file."""
+        if not os.path.exists(file_path):
+            return 0
+        with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
+            n = sum(1 for _ in fh)
+        return max(0, n - 1)
+
+    def _apply_missing_data_tolerance(
+        self,
+        file_path,
+        *,
+        source,
+        start_date,
+        end_date,
+        missing_data_tolerance_ratio,
+        sounding_hours=(0, 12),
+        verbose=False,
+    ):
+        """
+        Keep file if missing_ratio <= tolerance; otherwise delete it.
+
+        missing_ratio = 1 - min(1, n_data_rows / expected_native_rows)
+        """
+        if missing_data_tolerance_ratio is None:
+            return True, 0.0, self._count_csv_data_rows(file_path)
+
+        tol = float(missing_data_tolerance_ratio)
+        if not (0.0 <= tol <= 1.0):
+            raise ValueError("missing_data_tolerance_ratio must be in [0, 1] or None.")
+
+        expected = self._expected_native_observation_rows(
+            source, start_date, end_date, sounding_hours=sounding_hours
+        )
+        n_rows = self._count_csv_data_rows(file_path)
+        if expected <= 0:
+            return True, 0.0, n_rows
+
+        completeness = min(1.0, float(n_rows) / float(expected))
+        missing_ratio = 1.0 - completeness
+        if missing_ratio <= tol:
+            return True, missing_ratio, n_rows
+
+        try:
+            os.remove(file_path)
+        except Exception as exc:
+            if verbose:
+                print(
+                    f"[download_in_situ_data] Could not remove incomplete file "
+                    f"{file_path}: {exc}"
+                )
+        if verbose:
+            print(
+                f"[download_in_situ_data] Removed {os.path.basename(file_path)}: "
+                f"rows={n_rows}/{expected}, missing_ratio={missing_ratio:.3f} "
+                f"> tolerance={tol:.3f}"
+            )
+        return False, missing_ratio, n_rows
+
+    def _climate_output_path(
+        self,
+        output_folder,
+        source,
+        native_label,
+        country,
+        station_id,
+        start_date,
+        end_date,
+        *,
+        combined=False,
+    ):
+        country_tok = self._climate_safe_token(country, default="UNKNOWN")
+        sid_tok = self._climate_safe_token(
+            "combined" if combined else station_id, default="unknown"
+        )
+        src_tok = self._climate_safe_token(source, default="source")
+        tr_tok = self._climate_safe_token(native_label, default="native")
+        fname = (
+            f"climate_{src_tok}_{tr_tok}_{country_tok}_{sid_tok}_"
+            f"{start_date}_{end_date}.csv"
+        )
+        return os.path.join(output_folder, fname)
+
+    def _download_meteo_noaa_hourly_station(
+        self,
+        station_id,
+        years,
+        *,
+        fm12=True,
+        timeout=120,
+        verbose=False,
+    ):
+        """
+        Mirror ``climate::meteo_noaa_hourly`` for one station across *years*.
+
+        Downloads ``https://www.ncei.noaa.gov/pub/data/noaa/{year}/{station}-{year}.gz``,
+        parses fixed-width ISD records, optionally keeps FM-12 only, and returns
+        a DataFrame with climate-compatible columns.
+        """
+        import gzip
+        import io
+
+        widths = [
+            4, 6, 5, 4, 2, 2, 2, 2, 1, 6,
+            7, 5, 5, 5, 4, 3, 1, 1, 4, 1,
+            5, 1, 1, 1, 6, 1, 1, 1, 5, 1,
+            5, 1, 5, 1,
+        ]
+        col_year, col_month, col_day, col_hour = 3, 4, 5, 6
+        col_lat, col_lon, col_alt = 9, 10, 12
+        col_fm12 = 11
+        col_wd, col_ws = 15, 18
+        col_vis, col_t2m, col_dpt, col_slp = 24, 28, 30, 32
+
+        base_url = "https://www.ncei.noaa.gov/pub/data/noaa/"
+        frames = []
+
+        for year in years:
+            year = int(year)
+            url = f"{base_url}{year}/{station_id}-{year}.gz"
+            try:
+                resp = requests.get(url, timeout=timeout)
+                if resp.status_code >= 400:
+                    if verbose:
+                        print(
+                            f"[download_in_situ_data] Skip {station_id} {year}: "
+                            f"HTTP {resp.status_code}"
+                        )
+                    continue
+                content = resp.content or b""
+                if len(content) <= 100:
+                    if verbose:
+                        print(
+                            f"[download_in_situ_data] Skip {station_id} {year}: "
+                            f"empty/short payload ({len(content)} bytes)"
+                        )
+                    continue
+
+                with gzip.GzipFile(fileobj=io.BytesIO(content)) as gz:
+                    text_body = gz.read().decode("utf-8", errors="replace")
+
+                dat = pd.read_fwf(
+                    io.StringIO(text_body),
+                    widths=widths,
+                    header=None,
+                    dtype=str,
+                )
+            except Exception as exc:
+                if verbose:
+                    print(
+                        f"[download_in_situ_data] Skip {station_id} {year}: {exc}"
+                    )
+                continue
+
+            if dat is None or dat.empty:
+                continue
+
+            if fm12:
+                fm_col = dat.iloc[:, col_fm12].astype(str).str.strip()
+                dat = dat.loc[fm_col == "FM-12"].copy()
+                if dat.empty:
+                    continue
+
+            out = pd.DataFrame({
+                "year": pd.to_numeric(dat.iloc[:, col_year], errors="coerce"),
+                "month": pd.to_numeric(dat.iloc[:, col_month], errors="coerce"),
+                "day": pd.to_numeric(dat.iloc[:, col_day], errors="coerce"),
+                "hour": pd.to_numeric(dat.iloc[:, col_hour], errors="coerce"),
+                "lat": pd.to_numeric(dat.iloc[:, col_lat], errors="coerce"),
+                "lon": pd.to_numeric(dat.iloc[:, col_lon], errors="coerce"),
+                "alt": pd.to_numeric(dat.iloc[:, col_alt], errors="coerce"),
+                "wd": pd.to_numeric(dat.iloc[:, col_wd], errors="coerce"),
+                "ws": pd.to_numeric(dat.iloc[:, col_ws], errors="coerce"),
+                "visibility": pd.to_numeric(dat.iloc[:, col_vis], errors="coerce"),
+                "t2m": pd.to_numeric(dat.iloc[:, col_t2m], errors="coerce"),
+                "dpt2m": pd.to_numeric(dat.iloc[:, col_dpt], errors="coerce"),
+                "slp": pd.to_numeric(dat.iloc[:, col_slp], errors="coerce"),
+            })
+
+            out.loc[out["t2m"] == 9999, "t2m"] = pd.NA
+            out.loc[out["dpt2m"] == 9999, "dpt2m"] = pd.NA
+            out.loc[out["ws"] == 9999, "ws"] = pd.NA
+            out.loc[out["wd"] == 999, "wd"] = pd.NA
+            out.loc[out["slp"] == 99999, "slp"] = pd.NA
+            out.loc[out["visibility"] == 999999, "visibility"] = pd.NA
+
+            out["lon"] = out["lon"] / 1000.0
+            out["lat"] = out["lat"] / 1000.0
+            out["ws"] = out["ws"] / 10.0
+            out["t2m"] = out["t2m"] / 10.0
+            out["dpt2m"] = out["dpt2m"] / 10.0
+            out["slp"] = out["slp"] / 10.0
+
+            out["date"] = pd.to_datetime(
+                {
+                    "year": out["year"],
+                    "month": out["month"],
+                    "day": out["day"],
+                    "hour": out["hour"],
+                },
+                errors="coerce",
+                utc=True,
+            )
+            out = out.dropna(subset=["date"]).copy()
+            if out.empty:
+                continue
+            frames.append(out)
+
+        if not frames:
+            return pd.DataFrame(
+                columns=[
+                    "date", "year", "month", "day", "hour",
+                    "lon", "lat", "alt",
+                    "t2m", "dpt2m", "ws", "wd", "slp", "visibility",
+                ]
+            )
+
+        all_data = pd.concat(frames, ignore_index=True)
+        all_data = all_data[
+            [
+                "date", "year", "month", "day", "hour",
+                "lon", "lat", "alt",
+                "t2m", "dpt2m", "ws", "wd", "slp", "visibility",
+            ]
+        ]
+        return all_data.sort_values("date").reset_index(drop=True)
+
+    def _download_meteo_noaa_co2(self, start_date, end_date, *, timeout=120, verbose=False):
+        """Mirror ``climate::meteo_noaa_co2`` (Mauna Loa monthly CO2)."""
+        from io import StringIO
+
+        url = "https://gml.noaa.gov/webdata/ccgg/trends/co2/co2_mm_mlo.txt"
+        if verbose:
+            print(f"[download_in_situ_data] Downloading NOAA CO2: {url}")
+        resp = requests.get(url, timeout=timeout)
+        resp.raise_for_status()
+        # Skip comment lines starting with '#'
+        lines = [ln for ln in resp.text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+        co2 = pd.read_csv(
+            StringIO("\n".join(lines)),
+            sep=r"\s+",
+            header=None,
+            engine="python",
+            na_values=["-9.99", "-0.99", "-99.99"],
+        )
+        # climate colnames: yy, mm, yy_d, co2_avg, co2_interp, co2_seas, ndays, st_dev_days
+        n = min(8, co2.shape[1])
+        names = ["yy", "mm", "yy_d", "co2_avg", "co2_interp", "co2_seas", "ndays", "st_dev_days"][:n]
+        co2 = co2.iloc[:, :n].copy()
+        co2.columns = names
+        co2["date"] = pd.to_datetime(
+            dict(year=co2["yy"], month=co2["mm"], day=1),
+            errors="coerce",
+            utc=True,
+        )
+        start_dt = pd.to_datetime(start_date, utc=True)
+        end_dt = pd.to_datetime(end_date, utc=True) + pd.offsets.MonthEnd(0)
+        co2 = co2.dropna(subset=["date"])
+        co2 = co2[(co2["date"] >= start_dt) & (co2["date"] <= end_dt)].copy()
+        return co2.reset_index(drop=True)
+
+    @staticmethod
+    def _ogimet_http_get(url, *, params=None, timeout=60, retries=2, verbose=False):
+        """
+        GET from Ogimet with a short connect timeout and a few retries.
+
+        Returns response text, or ``None`` on failure.
+        """
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Connection": "close",
+        }
+        # (connect, read) — fail fast when the host is unreachable.
+        connect_s = min(10.0, float(timeout) if timeout else 10.0)
+        read_s = float(timeout) if timeout else 60.0
+        last_exc = None
+        for attempt in range(max(1, int(retries) + 1)):
+            try:
+                resp = requests.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=(connect_s, read_s),
+                )
+                resp.raise_for_status()
+                return resp.text
+            except Exception as exc:
+                last_exc = exc
+                if verbose:
+                    print(
+                        f"[download_in_situ_data] Ogimet request failed "
+                        f"(attempt {attempt + 1}/{retries + 1}): {exc}"
+                    )
+                if attempt < retries:
+                    time.sleep(min(2.0 * (attempt + 1), 5.0))
+        if verbose and last_exc is not None:
+            print(f"[download_in_situ_data] Ogimet giving up: {last_exc}")
+        return None
+
+    def _ogimet_probe(self, timeout=10, verbose=True):
+        """Return True if www.ogimet.com accepts a TCP/HTTPS connection."""
+        try:
+            resp = requests.head(
+                "https://www.ogimet.com/",
+                timeout=(min(5.0, float(timeout)), float(timeout)),
+                allow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            ok = resp.status_code < 500
+        except Exception as exc:
+            if verbose:
+                print(
+                    f"[download_in_situ_data] Ogimet unreachable "
+                    f"(www.ogimet.com): {exc}"
+                )
+            return False
+        if verbose and not ok:
+            print(
+                f"[download_in_situ_data] Ogimet probe HTTP {resp.status_code}"
+            )
+        return bool(ok)
+
+    @staticmethod
+    def _decode_aaxx_fm12(parte, *, default_year=None, default_month=None):
+        """
+        Decode a WMO FM-12 SYNOP (``AAXX``) telegram into scalar weather fields.
+
+        Returns a dict with keys compatible with the NOAA hourly mirror where
+        possible: ``t2m``, ``dpt2m``, ``wd``, ``ws``, ``slp``, ``station_pressure``,
+        ``visibility``, ``cloud_cover``, ``precip_mm``, plus ``synop_day``,
+        ``synop_hour``, ``wind_unit``. Missing / unparsable groups become ``None``.
+
+        Notes
+        -----
+        Covers the common Section 0–1 groups used by Ogimet ``getsynop``
+        ``PARTE`` strings. Section 3/5 national groups are ignored.
+        """
+        out = {
+            "t2m": None,
+            "dpt2m": None,
+            "wd": None,
+            "ws": None,
+            "slp": None,
+            "station_pressure": None,
+            "visibility": None,
+            "cloud_cover": None,
+            "precip_mm": None,
+            "synop_day": None,
+            "synop_hour": None,
+            "wind_unit": None,
+        }
+        if parte is None or (isinstance(parte, float) and pd.isna(parte)):
+            return out
+        text = str(parte).strip().rstrip("=")
+        if not text:
+            return out
+
+        # Tokenise; keep 5-char groups and AAXX / YYGGiw / IIiii
+        tokens = [t for t in re.split(r"\s+", text) if t]
+        if not tokens:
+            return out
+
+        # Drop leading AAXX if present
+        if tokens[0].upper() == "AAXX":
+            tokens = tokens[1:]
+        if not tokens:
+            return out
+
+        def _vis_vv(vv_code):
+            try:
+                vv = int(vv_code)
+            except Exception:
+                return None
+            if vv == 0:
+                return 0.0
+            if 1 <= vv <= 50:
+                return float(vv) * 100.0          # metres
+            if 56 <= vv <= 80:
+                return (vv - 50) * 1000.0         # km → m
+            if 81 <= vv <= 89:
+                return (vv - 80) * 5000.0 + 30_000.0
+            if vv == 90:
+                return 50.0
+            if vv == 91:
+                return 200.0
+            if vv == 92:
+                return 500.0
+            if vv == 93:
+                return 1000.0
+            if vv == 94:
+                return 2000.0
+            if vv == 95:
+                return 4000.0
+            if vv == 96:
+                return 10000.0
+            if vv == 97:
+                return 20000.0
+            if vv == 98:
+                return 50000.0
+            if vv == 99:
+                return 50000.0
+            return None
+
+        def _temp_sTTT(group):
+            # 1sTTT / 2sTTT
+            if len(group) != 5 or not group[1:].isdigit():
+                return None
+            sign = group[1]
+            tenths = int(group[2:])
+            if sign not in "01":
+                return None
+            val = tenths / 10.0
+            return -val if sign == "1" else val
+
+        def _pressure_PPPP(pppp):
+            if not pppp.isdigit() or len(pppp) != 4:
+                return None
+            code = int(pppp)
+            # WMO: omit thousands digit when P >= 1000 hPa (→ 0xxx);
+            # values near 900–999 use 9xxx.
+            if code < 5000:
+                return 1000.0 + code / 10.0
+            return code / 10.0
+
+        def _precip_RRR(rrr):
+            if not rrr.isdigit() or len(rrr) != 3:
+                return None
+            code = int(rrr)
+            if code == 0:
+                return 0.0
+            if 1 <= code <= 989:
+                return float(code)               # mm
+            if code == 990:
+                return 0.0
+            if 991 <= code <= 999:
+                return (code - 990) / 10.0       # 0.1–0.9 mm
+            return None
+
+        iw = None
+        # YYGGiw
+        if len(tokens[0]) == 5 and tokens[0].isdigit():
+            yyggiw = tokens[0]
+            out["synop_day"] = int(yyggiw[0:2])
+            out["synop_hour"] = int(yyggiw[2:4])
+            iw = int(yyggiw[4])
+            # WMO iw: 0/1 = m/s, 3/4 = knots
+            out["wind_unit"] = "m/s" if iw in (0, 1) else "kt"
+            tokens = tokens[1:]
+
+        # IIiii station id — skip
+        if tokens and len(tokens[0]) == 5 and tokens[0].isdigit():
+            tokens = tokens[1:]
+
+        # iRixhVV
+        if tokens and len(tokens[0]) == 5 and tokens[0][0].isdigit():
+            g = tokens[0]
+            if g[3:].isdigit() or g[3:] == "//":
+                if g[3:].isdigit():
+                    out["visibility"] = _vis_vv(g[3:])
+                tokens = tokens[1:]
+
+        # Nddff
+        if tokens and len(tokens[0]) == 5:
+            g = tokens[0]
+            if g[0] in "0123456789/" and (g[1:].isdigit() or "/" in g[1:]):
+                if g[0].isdigit():
+                    n = int(g[0])
+                    out["cloud_cover"] = None if n == 9 else float(n)  # oktas; 9 = sky obscured
+                dd = g[1:3]
+                ff = g[3:5]
+                if dd.isdigit():
+                    ddi = int(dd)
+                    if ddi == 0:
+                        out["wd"] = 0.0  # calm / variable handled with ff
+                    elif 1 <= ddi <= 36:
+                        out["wd"] = float(ddi * 10)
+                    # 99 = variable → leave None or set special
+                if ff.isdigit():
+                    ffi = int(ff)
+                    if ffi != 99:  # 99 often means missing / see 00fff
+                        ws = float(ffi)
+                        if out["wind_unit"] == "kt":
+                            ws = ws * 0.514444  # → m/s for consistency with NOAA path
+                        out["ws"] = ws
+                        if ffi == 0:
+                            out["wd"] = 0.0
+                tokens = tokens[1:]
+
+        # Remaining groups until 333 / 555 / NIL
+        for g in tokens:
+            gu = g.upper()
+            if gu in {"333", "555", "NIL"}:
+                break
+            if len(g) != 5:
+                continue
+            head = g[0]
+            rest = g[1:]
+            if head == "1" and rest[0] in "01" and rest[1:].isdigit():
+                out["t2m"] = _temp_sTTT(g)
+            elif head == "2" and len(rest) == 4 and rest.isdigit():
+                # Classic dewpoint 2sTTT; some automatics use 29uuu for RH%
+                if rest[0] == "9":
+                    continue
+                if rest[0] in "01":
+                    out["dpt2m"] = _temp_sTTT(g)
+            elif head == "3" and rest.isdigit():
+                out["station_pressure"] = _pressure_PPPP(rest)
+            elif head == "4" and rest.isdigit():
+                out["slp"] = _pressure_PPPP(rest)
+            elif head == "6" and len(rest) == 4 and rest[:3].isdigit():
+                out["precip_mm"] = _precip_RRR(rest[:3])
+            # 5appp, 7wwW1W2, 8NhCLCMCH, 9GGgg ignored for now
+
+        # Silence unused year/month (reserved for future 24h precip day-roll)
+        _ = (default_year, default_month)
+        return out
+
+    def _ogimet_attach_decoded_synop(self, df):
+        """Add decoded FM-12 columns from Ogimet synop ``PARTE`` (or similar) column."""
+        if df is None or df.empty:
+            return df
+
+        parte_col = None
+        for cand in ("PARTE", "Parte", "parte", "SYNOP", "synop", "telegram"):
+            if cand in df.columns:
+                parte_col = cand
+                break
+        if parte_col is None:
+            # Sometimes the last column holds the telegram without a stable name
+            for c in df.columns:
+                sample = df[c].astype(str).head(20).str.upper()
+                if sample.str.contains("AAXX", regex=False).any():
+                    parte_col = c
+                    break
+        if parte_col is None:
+            return df
+
+        year_col = None
+        month_col = None
+        for yc in ("year", "Year", "ANO", "Ano"):
+            if yc in df.columns:
+                year_col = yc
+                break
+        for mc in ("month", "Month", "MES", "Mes"):
+            if mc in df.columns:
+                month_col = mc
+                break
+
+        decoded_rows = []
+        for idx, row in df.iterrows():
+            y = int(row[year_col]) if year_col is not None and pd.notna(row[year_col]) else None
+            m = int(row[month_col]) if month_col is not None and pd.notna(row[month_col]) else None
+            decoded_rows.append(
+                self._decode_aaxx_fm12(row[parte_col], default_year=y, default_month=m)
+            )
+        decoded_df = pd.DataFrame(decoded_rows, index=df.index)
+
+        # Prefer existing date from YYGGiw when ANO/MES/DIA/HORA present but
+        # fill gaps from decoded synop_day/hour if needed — leave date as-is.
+        for col in decoded_df.columns:
+            if col in ("synop_day", "synop_hour", "wind_unit"):
+                # keep as metadata helpers
+                df[col] = decoded_df[col]
+            else:
+                df[col] = decoded_df[col]
+        return df
+
+    @staticmethod
+    def _ogimet_ensure_date_utc(df):
+        """
+        Ensure an Ogimet frame has a UTC-aware ``date`` column.
+
+        Ogimet ``getsynop`` / ``gsynres`` observation times are UTC (WMO SYNOP).
+        Component columns (year/month/day/hour or ANO/MES/DIA/HORA) and any
+        existing ``date`` values are interpreted as UTC, never as local time.
+        """
+        if df is None or df.empty:
+            return df
+
+        out = df.copy()
+        lower = {str(c).strip().lower(): c for c in out.columns}
+
+        def _col(*names):
+            for n in names:
+                if n in lower:
+                    return lower[n]
+            return None
+
+        if "date" in lower:
+            date_col = lower["date"]
+            out["date"] = pd.to_datetime(out[date_col], errors="coerce", utc=True)
+            if date_col != "date":
+                out = out.drop(columns=[date_col])
+            return out
+
+        y = _col("year", "ano")
+        m = _col("month", "mes")
+        d = _col("day", "dia")
+        h = _col("hour", "hora")
+        mi = _col("min", "minute", "minuto")
+        if y is not None and m is not None and d is not None:
+            out["date"] = pd.to_datetime(
+                {
+                    "year": pd.to_numeric(out[y], errors="coerce"),
+                    "month": pd.to_numeric(out[m], errors="coerce"),
+                    "day": pd.to_numeric(out[d], errors="coerce"),
+                    "hour": pd.to_numeric(out[h], errors="coerce") if h else 0,
+                    "minute": pd.to_numeric(out[mi], errors="coerce") if mi else 0,
+                },
+                errors="coerce",
+                utc=True,
+            )
+            return out
+
+        # HTML gsynres: often Date + HH:MM (UTC) as the first two columns
+        flat_cols = []
+        for c in out.columns:
+            if isinstance(c, tuple):
+                flat_cols.append(" ".join(str(x) for x in c if str(x) != "nan").strip())
+            else:
+                flat_cols.append(str(c).strip())
+        # Prefer columns whose names look like date / time
+        date_like = None
+        time_like = None
+        for i, name in enumerate(flat_cols):
+            nl = name.lower()
+            if date_like is None and ("date" in nl or nl in {"fecha"}):
+                # MultiIndex header pollution: value may already be MM/DD/YYYY
+                date_like = out.columns[i]
+            if time_like is None and (
+                nl in {"utc", "time", "hora"} or re.fullmatch(r"\d{1,2}:\d{2}", name)
+            ):
+                time_like = out.columns[i]
+        if date_like is not None:
+            date_s = out[date_like].astype(str).str.strip()
+            if time_like is not None:
+                time_s = out[time_like].astype(str).str.strip()
+                stamp = date_s + " " + time_s
+            else:
+                stamp = date_s
+            parsed = pd.to_datetime(stamp, errors="coerce", utc=True)
+            if parsed.notna().any():
+                out["date"] = parsed
+        return out
+
+    @staticmethod
+    def _ogimet_parse_gsynres_html(html):
+        """
+        Parse Ogimet ``gsynres`` decoded-synop HTML into a clean DataFrame.
+
+        Ogimet pages are malformed (unclosed ``<tr>``/``</thead>``), so
+        ``pandas.read_html`` puts observation cells into MultiIndex headers and
+        also scrapes layout/ad tables. This parser extracts only the
+        ``Decoded synop data`` table and returns UTC ``date`` plus weather
+        columns. Returns an empty DataFrame when the page has no observations
+        (``NO DATA FOUND``), is rate-limited, or has no usable table.
+        """
+        if not html or not str(html).strip():
+            return pd.DataFrame()
+
+        text_upper = str(html).upper()
+        if "NO DATA FOUND" in text_upper:
+            return pd.DataFrame()
+        if "LIMIT FOR OLD DATA QUERIES EXCEEDED" in text_upper:
+            # Signal to caller via empty + sentinel attribute is awkward;
+            # raise so the download loop can retry after a cooldown.
+            raise RuntimeError(
+                "Ogimet gsynres rate limit: max 1 old-data query per 20s per IP"
+            )
+
+        # Prefer the nucleo content (center panel); fall back to full page.
+        nucleo = re.search(
+            r"<!--\s*nucleo.*?-->(.*?)(?:<!--\s*fin del nucleo|</BODY>)",
+            html,
+            flags=re.I | re.S,
+        )
+        body = nucleo.group(1) if nucleo else html
+
+        # Table whose caption mentions decoded synop / synop data
+        table_match = None
+        for m in re.finditer(r"<table\b[^>]*>.*?</table>", body, flags=re.I | re.S):
+            block = m.group(0)
+            cap = re.search(r"<caption\b[^>]*>(.*?)</caption>", block, flags=re.I | re.S)
+            cap_txt = re.sub(r"<[^>]+>", " ", cap.group(1) if cap else "")
+            cap_txt = " ".join(cap_txt.split()).lower()
+            if "decoded synop" in cap_txt or "synop data" in cap_txt:
+                table_match = block
+                break
+        if table_match is None:
+            # Fallback: largest table in nucleo that has Date + T headers
+            candidates = list(
+                re.finditer(r"<table\b[^>]*>.*?</table>", body, flags=re.I | re.S)
+            )
+            best = None
+            best_n = 0
+            for m in candidates:
+                block = m.group(0)
+                ntd = len(re.findall(r"<td\b", block, flags=re.I))
+                if ntd > best_n and re.search(r"<th\b[^>]*>\s*Date", block, flags=re.I):
+                    best = block
+                    best_n = ntd
+            table_match = best
+        if not table_match:
+            return pd.DataFrame()
+
+        def _cell_text(cell_html):
+            # Drop images/scripts; keep alt text when present for WW icons
+            cell = re.sub(
+                r"<img\b[^>]*\balt=['\"]([^'\"]*)['\"][^>]*>",
+                r" \1 ",
+                cell_html,
+                flags=re.I,
+            )
+            cell = re.sub(r"<br\s*/?>", " ", cell, flags=re.I)
+            cell = re.sub(r"<[^>]+>", " ", cell)
+            cell = (
+                cell.replace("&nbsp;", " ")
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+            )
+            return " ".join(cell.split()).strip()
+
+        # Header cells from thead / first header row
+        thead = re.search(r"<thead\b[^>]*>(.*?)</thead>", table_match, flags=re.I | re.S)
+        header_src = thead.group(1) if thead else table_match
+        # If </thead> is missing (common on Ogimet), take th's before first <td>
+        if thead is None:
+            first_td = re.search(r"<td\b", table_match, flags=re.I)
+            header_src = table_match[: first_td.start()] if first_td else table_match
+
+        th_matches = list(
+            re.finditer(r"<th\b([^>]*)>(.*?)</th>", header_src, flags=re.I | re.S)
+        )
+        headers = []
+        for mth in th_matches:
+            attrs, inner = mth.group(1), mth.group(2)
+            name = _cell_text(inner)
+            colspan_m = re.search(r"colspan\s*=\s*['\"]?(\d+)", attrs, flags=re.I)
+            span = int(colspan_m.group(1)) if colspan_m else 1
+            if span >= 2 and name.lower() in {"date", "fecha"}:
+                headers.extend(["Date", "UTC"])
+                for _ in range(span - 2):
+                    headers.append(f"col_{len(headers)}")
+            else:
+                headers.append(name if name else f"col_{len(headers)}")
+                for _ in range(max(span - 1, 0)):
+                    headers.append(f"col_{len(headers)}")
+
+        # Data rows: groups of <td>...</td> belonging to each observation.
+        # Ogimet often omits </tr>, so split by <tr> and also fall back to
+        # chunking consecutive td's by expected width.
+        tr_parts = re.split(r"<tr\b[^>]*>", table_match, flags=re.I)[1:]
+        raw_rows = []
+        for part in tr_parts:
+            tds = re.findall(r"<td\b[^>]*>(.*?)</td>", part, flags=re.I | re.S)
+            if not tds:
+                continue
+            vals = [_cell_text(td) for td in tds]
+            # Skip pure header leftovers
+            if vals and vals[0].lower() in {"date", "fecha"}:
+                continue
+            raw_rows.append(vals)
+
+        if not raw_rows:
+            return pd.DataFrame()
+
+        width = len(headers) if headers else max(len(r) for r in raw_rows)
+        if not headers:
+            headers = [f"col_{i}" for i in range(width)]
+        # Pad / trim
+        norm = []
+        for r in raw_rows:
+            if len(r) < 2:
+                continue
+            # Observation rows start with MM/DD/YYYY or YYYY-MM-DD
+            if not re.match(r"^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}$", r[0]):
+                continue
+            if len(r) < width:
+                r = r + [None] * (width - len(r))
+            elif len(r) > width:
+                r = r[:width]
+            norm.append(r)
+        if not norm:
+            return pd.DataFrame()
+
+        # Unique column names
+        seen = {}
+        uniq_headers = []
+        for h in headers[:width]:
+            base = h or "col"
+            n = seen.get(base, 0)
+            seen[base] = n + 1
+            uniq_headers.append(base if n == 0 else f"{base}_{n}")
+
+        df = pd.DataFrame(norm, columns=uniq_headers)
+
+        # Build UTC date from Date + UTC/time columns
+        date_col = next((c for c in df.columns if c.lower() == "date"), None)
+        time_col = next(
+            (c for c in df.columns if c.lower() in {"utc", "time", "hora", "hour"}),
+            None,
+        )
+        if date_col is not None:
+            if time_col is not None:
+                stamp = df[date_col].astype(str).str.strip() + " " + df[time_col].astype(str).str.strip()
+            else:
+                stamp = df[date_col].astype(str).str.strip()
+            df["date"] = pd.to_datetime(stamp, errors="coerce", utc=True)
+
+        # Friendly aliases aligned with synop decode / NOAA where possible
+        rename = {}
+        for c in df.columns:
+            cl = c.lower().replace(" ", "")
+            if cl in {"t(c)", "t"}:
+                rename[c] = "t2m"
+            elif cl in {"td(c)", "td"}:
+                rename[c] = "dpt2m"
+            elif cl in {"psea(hpa)", "pseahpa", "psea"}:
+                rename[c] = "slp"
+            elif cl in {"ffkmh", "ff"}:
+                rename[c] = "ws_kmh"
+            elif cl in {"viskm", "vis"}:
+                rename[c] = "visibility_km"
+            elif cl in {"hr%", "hr"}:
+                rename[c] = "rh"
+        if rename:
+            df = df.rename(columns=rename)
+        # Convert wind km/h → m/s for consistency with synop decode
+        if "ws_kmh" in df.columns and "ws" not in df.columns:
+            ws = pd.to_numeric(df["ws_kmh"], errors="coerce")
+            df["ws"] = ws / 3.6
+        return df
+
+    def _download_meteo_ogimet_station(
+        self,
+        wmo_id,
+        start_date,
+        end_date,
+        *,
+        interval="daily",
+        backend=None,
+        country_name=None,
+        timeout=120,
+        verbose=False,
+        decode_synop=True,
+    ):
+        """
+        Pure-Python mirror of ``climate::meteo_ogimet``.
+
+        Observation times are always treated as **UTC** (WMO SYNOP convention).
+        The returned ``date`` column is timezone-aware UTC.
+
+        - backend ``synop`` (default for hourly): Ogimet ``getsynop`` raw CSV
+          (``PARTE`` AAXX telegrams). When ``decode_synop=True`` (default),
+          FM-12 groups are decoded into ``t2m``, ``dpt2m``, ``wd``, ``ws``,
+          ``slp``, etc.
+        - backend ``html`` (default for daily): Ogimet ``gsynres`` HTML tables.
+          Decoded HTML pages are truncated by Ogimet for long ranges, so this
+          path requests ≤3-day chunks ending at 23:00 UTC and sleeps ~21s
+          between calls (slow for multi-week ranges; prefer ``synop``).
+        """
+        from io import StringIO
+        import time as _time
+
+        wmo = int(wmo_id)
+        effective = backend
+        if effective is None:
+            effective = "synop" if interval == "hourly" else "html"
+        effective = str(effective).lower()
+        if effective not in {"synop", "html"}:
+            raise ValueError("ogimet backend must be 'synop' or 'html'.")
+
+        # Ogimet begin/end query params are UTC (YYYYMMDDhhmm).
+        begin = pd.to_datetime(start_date, utc=True).strftime("%Y%m%d0000")
+        end = pd.to_datetime(end_date, utc=True).strftime("%Y%m%d2359")
+
+        if effective == "synop":
+            params = {"begin": begin, "end": end, "header": "yes"}
+            if country_name:
+                params["state"] = str(country_name)
+            else:
+                params["block"] = str(wmo)
+            url = "https://www.ogimet.com/cgi-bin/getsynop"
+            if verbose:
+                print(
+                    f"[download_in_situ_data] Ogimet synop (UTC): "
+                    f"{url} params={params}"
+                )
+            text_body = self._ogimet_http_get(
+                url, params=params, timeout=timeout, retries=2, verbose=verbose
+            )
+            if not text_body:
+                return pd.DataFrame()
+            text_body = text_body.strip()
+            if not text_body or "Sorry" in text_body[:200]:
+                return pd.DataFrame()
+            df = pd.read_csv(StringIO(text_body))
+            # Normalize column names
+            cols = {c: c.strip() for c in df.columns}
+            df = df.rename(columns=cols)
+            if df.empty:
+                return pd.DataFrame()
+            if "station" not in df.columns:
+                df.insert(0, "station", wmo)
+            else:
+                df["station"] = wmo
+            df = self._ogimet_ensure_date_utc(df)
+            if decode_synop:
+                df = self._ogimet_attach_decoded_synop(df)
+                df = self._ogimet_ensure_date_utc(df)
+            return df
+
+        # HTML backend via gsynres. Ogimet silently truncates large decoded
+        # HTML pages (~2–3 days of 3-hourly rows), so we request small chunks
+        # ending at 23:00 UTC and pause between calls (≈1 query / 20s).
+        frames = []
+        cur = pd.to_datetime(start_date, utc=True).floor("D")
+        end_ts = pd.to_datetime(end_date, utc=True).floor("D")
+        max_chunk_days = 3
+        while cur <= end_ts:
+            chunk_end = min(cur + pd.Timedelta(days=max_chunk_days - 1), end_ts)
+            ndays = int((chunk_end - cur).days) + 1
+            # Reference date/hora must be the chunk END in UTC (include that day).
+            url = (
+                "https://www.ogimet.com/cgi-bin/gsynres"
+                f"?lang=en&ind={wmo}"
+                f"&ano={chunk_end.year}&mes={int(chunk_end.month):02d}"
+                f"&day={int(chunk_end.day):02d}&hora=23"
+                f"&ndays={ndays}&decoded=yes"
+            )
+            if verbose:
+                print(f"[download_in_situ_data] Ogimet html (UTC): {url}")
+
+            tab = None
+            for attempt in range(3):
+                html = self._ogimet_http_get(
+                    url, timeout=timeout, retries=2, verbose=verbose
+                )
+                if not html:
+                    break
+                try:
+                    tab = self._ogimet_parse_gsynres_html(html)
+                    break
+                except RuntimeError as exc:
+                    # Rate limit: wait and retry (Ogimet allows ~1 query / 20s)
+                    if verbose:
+                        print(
+                            f"[download_in_situ_data] {exc}; "
+                            f"sleeping 21s (attempt {attempt + 1}/3)"
+                        )
+                    _time.sleep(21)
+                    tab = None
+                except Exception as exc:
+                    if verbose:
+                        print(
+                            f"[download_in_situ_data] Ogimet html parse failed: {exc}"
+                        )
+                    tab = None
+                    break
+
+            if tab is not None and not tab.empty:
+                tab = tab.copy()
+                tab.insert(0, "station_ID", wmo)
+                tab = self._ogimet_ensure_date_utc(tab)
+                frames.append(tab)
+            cur = chunk_end + pd.Timedelta(days=1)
+            # Be polite between chunks to avoid the 20s rate limit
+            if cur <= end_ts:
+                _time.sleep(21)
+
+        if not frames:
+            return pd.DataFrame()
+        out = pd.concat(frames, ignore_index=True)
+        if "date" in out.columns:
+            out = out.drop_duplicates(subset=["date"], keep="last")
+            out = out.sort_values("date").reset_index(drop=True)
+        return out
+
+    def _download_sounding_wyoming_station(
+        self,
+        wmo_id,
+        start_date,
+        end_date,
+        *,
+        hours=(0, 12),
+        timeout=120,
+        verbose=False,
+    ):
+        """Mirror ``climate::sounding_wyoming`` over a date range (TEMP/LIST text)."""
+        from io import StringIO
+
+        wmo = int(wmo_id)
+        frames = []
+        days = pd.date_range(start_date, end_date, freq="D")
+        for day in days:
+            for hh in hours:
+                url = (
+                    "https://weather.uwyo.edu/wsgi/sounding?"
+                    f"datetime={day.year:04d}-{day.month:02d}-{day.day:02d}"
+                    f"%20{int(hh):02d}:00:00&id={wmo:05d}&src=UNKNOWN&type=TEXT:LIST"
+                )
+                try:
+                    resp = requests.get(url, timeout=timeout)
+                    if resp.status_code >= 400 or len(resp.text) < 800:
+                        continue
+                    # Extract PRE> ... data block if present; else parse fixed-width body.
+                    text = resp.text
+                    if "PRE>" not in text.upper() and "PRES" not in text.upper():
+                        continue
+                    # Keep raw text rows that look like sounding levels
+                    rows = []
+                    for ln in text.splitlines():
+                        s = re.sub(r"<[^>]+>", " ", ln).strip()
+                        if not s:
+                            continue
+                        parts = s.split()
+                        if len(parts) >= 11:
+                            try:
+                                float(parts[0])
+                                float(parts[1])
+                            except Exception:
+                                continue
+                            rows.append(parts[:11])
+                    if not rows:
+                        continue
+                    df = pd.DataFrame(
+                        rows,
+                        columns=[
+                            "PRES", "HGHT", "TEMP", "DWPT", "RELH",
+                            "MIXR", "DRCT", "SKNT", "THTA", "THTE", "THTV",
+                        ],
+                    )
+                    for c in df.columns:
+                        df[c] = pd.to_numeric(df[c], errors="coerce")
+                    df.insert(0, "sounding_time_utc", f"{day.date()} {int(hh):02d}:00")
+                    df.insert(0, "wmo_id", wmo)
+                    frames.append(df)
+                    if verbose:
+                        print(
+                            f"[download_in_situ_data] Sounding {wmo} "
+                            f"{day.date()} {hh:02d}Z: {len(df)} levels"
+                        )
+                except Exception as exc:
+                    if verbose:
+                        print(f"[download_in_situ_data] Sounding skip: {exc}")
+                    continue
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+    def _download_meteo_imgw(
+        self,
+        start_date,
+        end_date,
+        *,
+        interval="daily",
+        rank="synop",
+        station_ids=None,
+        timeout=120,
+        verbose=False,
+    ):
+        """
+        Pure-Python mirror of ``climate::meteo_imgw`` for hourly/daily/monthly.
+
+        Downloads public IMGW-PIB zip archives from danepubliczne.imgw.pl and
+        optionally filters to station ids/names.
+        """
+        import io
+        import zipfile
+
+        rank = str(rank).lower()
+        if rank not in {"synop", "climate", "precip"}:
+            raise ValueError("imgw_rank must be 'synop', 'climate', or 'precip'.")
+        if interval == "10min":
+            raise NotImplementedError(
+                "imgw 10-min datastore (meteo_imgw_datastore) is not "
+                "implemented in the pure-Python backend yet."
+            )
+        interval_map = {"hourly": "godzinowe", "daily": "dobowe", "monthly": "miesieczne"}
+        if interval not in interval_map:
+            raise ValueError("imgw interval must be hourly, daily, or monthly.")
+        folder = interval_map[interval]
+        years = range(pd.to_datetime(start_date).year, pd.to_datetime(end_date).year + 1)
+        frames = []
+        station_filter = None
+        if station_ids:
+            station_filter = {str(s).strip().upper() for s in station_ids if s not in (None, "")}
+
+        for year in years:
+            # Prefer yearly pack; fall back to monthly packs.
+            candidates = [
+                f"https://danepubliczne.imgw.pl/data/dane_pomiarowo_obserwacyjne/"
+                f"dane_meteorologiczne/{folder}/{rank}/{year}/{year}_{rank[0]}.zip",
+            ]
+            for month in range(1, 13):
+                candidates.append(
+                    f"https://danepubliczne.imgw.pl/data/dane_pomiarowo_obserwacyjne/"
+                    f"dane_meteorologiczne/{folder}/{rank}/{year}/"
+                    f"{year}_{month:02d}_{rank[0]}.zip"
+                )
+
+            for url in candidates:
+                try:
+                    resp = requests.get(url, timeout=timeout)
+                    if resp.status_code >= 400 or len(resp.content) < 100:
+                        continue
+                    if verbose:
+                        print(f"[download_in_situ_data] IMGW zip: {url}")
+                    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+                        for name in zf.namelist():
+                            if not name.lower().endswith((".csv", ".txt")):
+                                continue
+                            with zf.open(name) as fh:
+                                raw = fh.read()
+                            for enc in ("utf-8", "cp1250", "latin-1"):
+                                try:
+                                    text_body = raw.decode(enc)
+                                    break
+                                except Exception:
+                                    text_body = None
+                            if not text_body:
+                                continue
+                            try:
+                                df = pd.read_csv(io.StringIO(text_body), header=None, dtype=str)
+                            except Exception:
+                                continue
+                            if df.empty:
+                                continue
+                            if station_filter is not None:
+                                # Station id/name often in first few columns.
+                                mask = False
+                                for col in df.columns[:3]:
+                                    mask = mask | df[col].astype(str).str.upper().isin(station_filter)
+                                df = df.loc[mask].copy()
+                            if df.empty:
+                                continue
+                            df["source_file"] = os.path.basename(name)
+                            df["imgw_year"] = year
+                            frames.append(df)
+                    # If yearly pack worked, skip monthly candidates for that year.
+                    if url.endswith(f"{year}_{rank[0]}.zip"):
+                        break
+                except Exception as exc:
+                    if verbose:
+                        print(f"[download_in_situ_data] IMGW skip {url}: {exc}")
+                    continue
+
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+    def download_in_situ_data(
+        self,
+        roi=None,
+        start_date=None,
+        end_date=None,
+        *,
+        source="noaa_hourly",
+        separate_stations=True,
+        output_folder="data/in_situ",
+        fm12=True,
+        ogimet_backend=None,
+        country_name=None,
+        imgw_rank="synop",
+        sounding_hours=(0, 12),
+        no_of_stations=None,
+        missing_data_tolerance_ratio=None,
+        n_jobs=None,
+        timeout=120,
+        verbose=True,
+        estimate_RH=True,
+    ):
+        """
+        Download in-situ meteorological data (climate-package style backends).
+
+        Pure-Python mirrors of the global/Polish climate R functions:
+
+        - ``noaa_hourly`` → ``meteo_noaa_hourly`` (native hourly)
+        - ``ogimet`` → ``meteo_ogimet`` (native hourly SYNOP)
+        - ``noaa_co2`` → ``meteo_noaa_co2`` (native monthly; ROI ignored)
+        - ``sounding_wyoming`` → ``sounding_wyoming`` (native sounding times)
+        - ``imgw`` → ``meteo_imgw`` (native hourly)
+
+        Each source is downloaded at its native temporal cadence.
+
+        Output filenames include source, native cadence, country, and station id:
+        ``climate_{source}_{native}_{country}_{station_id}_{start}_{end}.csv``
+
+        Parameters
+        ----------
+        roi : list | tuple | str | None
+            ROI for station discovery. Required except for ``source='noaa_co2'``.
+        start_date, end_date : str
+            ISO dates (YYYY-MM-DD).
+        source : str
+            One of ``noaa_hourly``, ``ogimet``, ``noaa_co2``, ``sounding_wyoming``, ``imgw``.
+        separate_stations : bool
+            Write one CSV per station when True.
+        output_folder : str
+            Destination folder.
+        fm12 : bool
+            NOAA ISH FM-12 filter (``noaa_hourly`` only).
+        ogimet_backend : str | None
+            ``'synop'``, ``'html'``, or None (defaults to ``synop`` for native
+            hourly). ``synop`` returns Ogimet ``getsynop`` CSV and, by default,
+            decodes FM-12 ``PARTE`` AAXX groups into ``t2m``, ``dpt2m``, ``wd``,
+            ``ws``, ``slp``, etc. ``html`` uses Ogimet ``gsynres`` decoded tables.
+            For both backends, observation times and the ``date`` column are
+            **UTC** (never local time).
+        country_name : str | None
+            Ogimet country-mode bulk download (synop backend).
+        imgw_rank : str
+            IMGW station rank: ``synop``, ``climate``, or ``precip``.
+        sounding_hours : tuple[int, ...]
+            UTC hours to request for Wyoming soundings (default 00 and 12).
+        no_of_stations : int | None
+            Cap stations from ROI discovery.
+        missing_data_tolerance_ratio : float | None
+            If set (0–1), keep a station file only when
+            ``missing_ratio = 1 - rows/expected_native_rows`` is **≤** this
+            tolerance. Files that fail are deleted. ``None`` disables the check.
+        n_jobs : int | None
+            Parallel workers for per-station downloads. ``None`` or ``<= 1``
+            runs sequentially; ``> 1`` uses a thread pool.
+        timeout : int | float
+            HTTP timeout seconds.
+        verbose : bool
+            Progress logs.
+        estimate_RH : bool
+            If True (default), add an ``rh`` column [%] estimated from air
+            temperature and dewpoint via the August–Roche–Magnus approximation
+            when ``t2m``/``dpt2m`` (or aliases) are present. If False, leave
+            station tables as downloaded (no RH estimation).
+        """
+        source = str(source).strip().lower()
+        allowed = {
+            "noaa_hourly", "ogimet", "noaa_co2", "sounding_wyoming", "imgw",
+        }
+        if source not in allowed:
+            raise ValueError(f"source must be one of {sorted(allowed)}")
+        if not start_date or not end_date:
+            raise ValueError("start_date and end_date are required.")
+        estimate_RH = bool(estimate_RH)
+        if missing_data_tolerance_ratio is not None:
+            tol = float(missing_data_tolerance_ratio)
+            if not (0.0 <= tol <= 1.0):
+                raise ValueError("missing_data_tolerance_ratio must be in [0, 1] or None.")
+            missing_data_tolerance_ratio = tol
+        if n_jobs is not None:
+            n_jobs = int(n_jobs)
+            if n_jobs < 1:
+                raise ValueError("n_jobs must be >= 1 or None.")
+
+        interval, native_label = self._native_climate_interval(source)
+
+        if source == "ogimet":
+            if not self._ogimet_probe(timeout=min(10, float(timeout) if timeout else 10), verbose=verbose):
+                raise RuntimeError(
+                    "www.ogimet.com is unreachable from this network "
+                    "(TCP/HTTPS connect timeout). Use source='noaa_hourly' "
+                    "instead, or retry with a VPN / different network."
+                )
+
+        start_dt = pd.to_datetime(start_date, errors="coerce", utc=True)
+        end_dt = pd.to_datetime(end_date, errors="coerce", utc=True)
+        if pd.isna(start_dt) or pd.isna(end_dt):
+            raise ValueError("start_date and end_date must be valid YYYY-MM-DD dates.")
+        if start_dt > end_dt:
+            raise ValueError("start_date must be <= end_date.")
+        end_dt_inclusive = end_dt + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+
+        os.makedirs(output_folder, exist_ok=True)
+
+        bbox = None
+        station_meta = []  # list of dicts: station_id, country, wmo_id, ...
+
+        if source == "noaa_co2":
+            station_meta = [{
+                "station_id": "MLO",
+                "country": "UNITED_STATES",
+                "wmo_id": None,
+            }]
+        else:
+            if roi is None:
+                raise ValueError(f"roi is required for source='{source}'.")
+            bbox = self._roi_to_bbox_list(roi)
+            if bbox is None:
+                raise ValueError("Could not resolve bbox from roi.")
+
+            if verbose:
+                print("[download_in_situ_data] Discovering stations via list_in_situ_stations ...")
+            discovery = self.list_in_situ_stations(
+                roi=roi,
+                start_date=start_date,
+                end_date=end_date,
+                no_of_stations=no_of_stations,
+                timeout=timeout,
+                export=False,
+                verbose=verbose,
+            )
+            for row in discovery.get("stations") or []:
+                usaf = wban = country = None
+                for k, v in row.items():
+                    lk = str(k).lower()
+                    if lk == "usaf" and usaf is None:
+                        usaf = v
+                    elif lk == "wban" and wban is None:
+                        wban = v
+                    elif lk in {"country", "countries"} and country is None:
+                        country = v
+                sid = self._climate_station_id(usaf, wban)
+                if not sid:
+                    continue
+                station_meta.append({
+                    "station_id": sid,
+                    "country": (str(country).strip().upper() if country not in (None, "") else "UNKNOWN"),
+                    "wmo_id": self._usaf_to_wmo(usaf),
+                    "usaf": usaf,
+                    "wban": wban,
+                    "name": row.get("STATION NAME") or row.get("station_name") or row.get("NAME"),
+                })
+
+            # Deduplicate by station_id
+            seen = set()
+            uniq = []
+            for s in station_meta:
+                if s["station_id"] in seen:
+                    continue
+                seen.add(s["station_id"])
+                uniq.append(s)
+            station_meta = uniq
+
+        if verbose:
+            print(f"[download_in_situ_data] source={source}, native_interval={interval}, stations={len(station_meta)}")
+
+        if not station_meta:
+            return {
+                "source": source,
+                "native_interval": interval,
+                "bbox": bbox,
+                "start_date": str(start_date),
+                "end_date": str(end_date),
+                "stations_count": 0,
+                "station_ids": [],
+                "separate_stations": bool(separate_stations),
+                "output_files": [],
+                "failed": [],
+                "removed_incomplete": [],
+                "missing_data_tolerance_ratio": missing_data_tolerance_ratio,
+                "n_jobs": n_jobs,
+            }
+
+        years = list(range(int(start_dt.year), int(end_dt.year) + 1))
+        output_files = []
+        failed = []
+        removed_incomplete = []
+        combined_frames = []
+
+        try:
+            from tqdm import tqdm
+        except Exception:
+            tqdm = None
+
+        def _keep_or_drop(path_out, station_key):
+            keep, missing_ratio, n_rows = self._apply_missing_data_tolerance(
+                path_out,
+                source=source,
+                start_date=start_date,
+                end_date=end_date,
+                missing_data_tolerance_ratio=missing_data_tolerance_ratio,
+                sounding_hours=sounding_hours,
+                verbose=verbose,
+            )
+            if keep:
+                output_files.append(path_out)
+                return True
+            removed_incomplete.append(
+                {
+                    "station_id": station_key,
+                    "file": path_out,
+                    "missing_ratio": missing_ratio,
+                    "rows": n_rows,
+                }
+            )
+            return False
+
+        # ---- noaa_co2 (single series) ----
+        if source == "noaa_co2":
+            try:
+                df = self._download_meteo_noaa_co2(
+                    start_date, end_date, timeout=timeout, verbose=verbose
+                )
+            except Exception as exc:
+                raise RuntimeError(f"noaa_co2 download failed: {exc}") from exc
+            meta = station_meta[0]
+            if df is None or df.empty:
+                failed.append(meta["station_id"])
+            else:
+                df.insert(0, "country", meta["country"])
+                df.insert(0, "station_id", meta["station_id"])
+                if estimate_RH:
+                    df = self._attach_estimated_rh(df)
+                path_out = self._climate_output_path(
+                    output_folder, source, native_label, meta["country"],
+                    meta["station_id"], start_date, end_date,
+                )
+                df.to_csv(path_out, index=False)
+                _keep_or_drop(path_out, meta["station_id"])
+            return {
+                "source": source,
+                "native_interval": interval,
+                "bbox": bbox,
+                "start_date": str(start_date),
+                "end_date": str(end_date),
+                "stations_count": 1,
+                "station_ids": [meta["station_id"]],
+                "separate_stations": True,
+                "output_files": output_files,
+                "failed": failed,
+                "removed_incomplete": removed_incomplete,
+                "missing_data_tolerance_ratio": missing_data_tolerance_ratio,
+                "n_jobs": n_jobs,
+            }
+
+        # ---- imgw (archive bulk, optional station filter) ----
+        if source == "imgw":
+            filter_ids = []
+            for s in station_meta:
+                if s.get("name"):
+                    filter_ids.append(str(s["name"]).upper())
+                if s.get("wmo_id") is not None:
+                    filter_ids.append(str(s["wmo_id"]))
+                filter_ids.append(s["station_id"])
+            try:
+                df = self._download_meteo_imgw(
+                    start_date,
+                    end_date,
+                    interval=interval,
+                    rank=imgw_rank,
+                    station_ids=filter_ids,
+                    timeout=timeout,
+                    verbose=verbose,
+                )
+            except Exception as exc:
+                raise RuntimeError(f"imgw download failed: {exc}") from exc
+            country = "POLAND"
+            if df is None or df.empty:
+                failed = [s["station_id"] for s in station_meta]
+            else:
+                if estimate_RH:
+                    df = self._attach_estimated_rh(df)
+                path_out = self._climate_output_path(
+                    output_folder, source, native_label, country,
+                    "combined", start_date, end_date, combined=True,
+                )
+                df.to_csv(path_out, index=False)
+                _keep_or_drop(path_out, "combined")
+            return {
+                "source": source,
+                "native_interval": interval,
+                "bbox": bbox,
+                "start_date": str(start_date),
+                "end_date": str(end_date),
+                "stations_count": len(station_meta),
+                "station_ids": [s["station_id"] for s in station_meta],
+                "separate_stations": False,
+                "output_files": output_files,
+                "failed": failed,
+                "removed_incomplete": removed_incomplete,
+                "missing_data_tolerance_ratio": missing_data_tolerance_ratio,
+                "n_jobs": n_jobs,
+            }
+
+        # ---- per-station sources ----
+        # Ogimet country-mode skips per-station downloads (single bulk request).
+        run_per_station = not (source == "ogimet" and country_name)
+        n_workers = max(1, int(n_jobs or 1)) if run_per_station else 1
+        # Quieter per-station HTTP logs when parallel to avoid interleaved spam.
+        worker_verbose = bool(verbose) and n_workers <= 1
+
+        def _fetch_station(meta):
+            """Download one station; return a result dict (thread-safe)."""
+            station_id = meta["station_id"]
+            country = meta.get("country") or "UNKNOWN"
+            wmo_id = meta.get("wmo_id")
+            try:
+                if source == "noaa_hourly":
+                    df = self._download_meteo_noaa_hourly_station(
+                        station_id=station_id,
+                        years=years,
+                        fm12=fm12,
+                        timeout=timeout,
+                        verbose=worker_verbose,
+                    )
+                    if df is not None and not df.empty:
+                        mask = (df["date"] >= start_dt) & (df["date"] <= end_dt_inclusive)
+                        df = df.loc[mask].copy()
+                elif source == "ogimet":
+                    if wmo_id is None:
+                        raise RuntimeError("Could not derive WMO id for ogimet.")
+                    df = self._download_meteo_ogimet_station(
+                        wmo_id=wmo_id,
+                        start_date=start_date,
+                        end_date=end_date,
+                        interval=interval,
+                        backend=ogimet_backend if ogimet_backend is not None else "synop",
+                        country_name=None,
+                        timeout=timeout,
+                        verbose=worker_verbose,
+                    )
+                    # Ogimet observation times are UTC; clip to the UTC request window.
+                    if df is not None and not df.empty and "date" in df.columns:
+                        dates = pd.to_datetime(df["date"], errors="coerce", utc=True)
+                        mask = (dates >= start_dt) & (dates <= end_dt_inclusive)
+                        df = df.loc[mask].copy()
+                        df["date"] = dates.loc[mask]
+                elif source == "sounding_wyoming":
+                    if wmo_id is None:
+                        raise RuntimeError("Could not derive WMO id for sounding_wyoming.")
+                    df = self._download_sounding_wyoming_station(
+                        wmo_id=wmo_id,
+                        start_date=start_date,
+                        end_date=end_date,
+                        hours=tuple(sounding_hours),
+                        timeout=timeout,
+                        verbose=worker_verbose,
+                    )
+                else:
+                    raise RuntimeError(f"Unhandled source: {source}")
+            except Exception as exc:
+                return {
+                    "status": "failed",
+                    "station_id": station_id,
+                    "error": str(exc),
+                    "df": None,
+                    "path_out": None,
+                    "sid_for_name": None,
+                }
+
+            if df is None or df.empty:
+                return {
+                    "status": "empty",
+                    "station_id": station_id,
+                    "error": None,
+                    "df": None,
+                    "path_out": None,
+                    "sid_for_name": None,
+                }
+
+            if "station_id" not in df.columns:
+                df.insert(0, "station_id", station_id)
+            if "country" not in df.columns:
+                df.insert(1, "country", country)
+
+            if estimate_RH:
+                df = self._attach_estimated_rh(df)
+
+            sid_for_name = station_id if source != "ogimet" else (wmo_id or station_id)
+            path_out = None
+            if separate_stations:
+                path_out = self._climate_output_path(
+                    output_folder, source, native_label, country,
+                    sid_for_name,
+                    start_date, end_date,
+                )
+                df.to_csv(path_out, index=False)
+                return {
+                    "status": "ok",
+                    "station_id": station_id,
+                    "error": None,
+                    "df": None,
+                    "path_out": path_out,
+                    "sid_for_name": sid_for_name,
+                }
+            return {
+                "status": "ok",
+                "station_id": station_id,
+                "error": None,
+                "df": df,
+                "path_out": None,
+                "sid_for_name": sid_for_name,
+            }
+
+        def _commit_station_result(result):
+            station_id = result["station_id"]
+            status = result["status"]
+            if status == "failed":
+                failed.append(station_id)
+                if verbose:
+                    print(f"[download_in_situ_data] Failed {station_id}: {result['error']}")
+                return
+            if status == "empty":
+                failed.append(station_id)
+                if verbose:
+                    print(f"[download_in_situ_data] No data for {station_id}")
+                return
+            if separate_stations and result["path_out"]:
+                _keep_or_drop(result["path_out"], result["sid_for_name"])
+            elif result["df"] is not None:
+                combined_frames.append(result["df"])
+
+        if run_per_station:
+            if verbose and n_workers > 1:
+                print(
+                    f"[download_in_situ_data] Parallel station downloads: "
+                    f"n_jobs={n_workers}, stations={len(station_meta)}"
+                )
+
+            if n_workers <= 1:
+                iterator = station_meta
+                if tqdm is not None:
+                    iterator = tqdm(station_meta, desc=f"climate {source}", unit="station")
+                for meta in iterator:
+                    if verbose and tqdm is None:
+                        print(
+                            f"[download_in_situ_data] Downloading {source}: "
+                            f"{meta['station_id']} ({meta.get('country') or 'UNKNOWN'})"
+                        )
+                    _commit_station_result(_fetch_station(meta))
+            else:
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as executor:
+                    futures = {
+                        executor.submit(_fetch_station, meta): meta["station_id"]
+                        for meta in station_meta
+                    }
+                    done_iter = concurrent.futures.as_completed(futures)
+                    if tqdm is not None:
+                        done_iter = tqdm(
+                            done_iter,
+                            total=len(futures),
+                            desc=f"climate {source}",
+                            unit="station",
+                        )
+                    for future in done_iter:
+                        _commit_station_result(future.result())
+
+        # Ogimet country-mode bulk (optional)
+        if source == "ogimet" and country_name:
+            try:
+                df = self._download_meteo_ogimet_station(
+                    wmo_id=0,
+                    start_date=start_date,
+                    end_date=end_date,
+                    interval=interval,
+                    backend=ogimet_backend if ogimet_backend is not None else "synop",
+                    country_name=country_name,
+                    timeout=timeout,
+                    verbose=verbose,
+                )
+                if df is not None and not df.empty:
+                    if "date" in df.columns:
+                        dates = pd.to_datetime(df["date"], errors="coerce", utc=True)
+                        mask = (dates >= start_dt) & (dates <= end_dt_inclusive)
+                        df = df.loc[mask].copy()
+                        df["date"] = dates.loc[mask]
+                    if estimate_RH:
+                        df = self._attach_estimated_rh(df)
+                    path_out = self._climate_output_path(
+                        output_folder, source, native_label,
+                        str(country_name).upper().replace(" ", "_"),
+                        "COUNTRY",
+                        start_date, end_date, combined=True,
+                    )
+                    df.to_csv(path_out, index=False)
+                    _keep_or_drop(path_out, "COUNTRY")
+            except Exception as exc:
+                if verbose:
+                    print(f"[download_in_situ_data] Ogimet country_name failed: {exc}")
+
+        if not separate_stations and combined_frames:
+            combined = pd.concat(combined_frames, ignore_index=True)
+            if estimate_RH:
+                combined = self._attach_estimated_rh(combined)
+            path_out = self._climate_output_path(
+                output_folder, source, native_label, "MULTI",
+                "combined", start_date, end_date, combined=True,
+            )
+            combined.to_csv(path_out, index=False)
+            _keep_or_drop(path_out, "combined")
+
+        if verbose:
+            print(
+                f"[download_in_situ_data] Done: saved={len(output_files)}, "
+                f"failed/empty={len(failed)}, "
+                f"removed_incomplete={len(removed_incomplete)}"
+            )
+
+        return {
+            "source": source,
+            "native_interval": interval,
+            "bbox": bbox,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "stations_count": len(station_meta),
+            "station_ids": [s["station_id"] for s in station_meta],
+            "separate_stations": bool(separate_stations),
+            "output_files": output_files,
+            "failed": failed,
+            "removed_incomplete": removed_incomplete,
+            "missing_data_tolerance_ratio": missing_data_tolerance_ratio,
+            "n_jobs": n_jobs,
+        }
+
+
+    def download_in_situ_data_noaa(
+        self,
+        roi,
+        start_date,
+        end_date,
+        variables_list=None,
+        dataset="global-hourly",
+        separate_stations=True,
+        output_folder="data/noaa",
+        include_attributes=False,
+        units=None,
+        timeout=120,
+        verbose=True,
+    ):
+        """
+        Discover NOAA stations inside an ROI and download in-situ weather data as CSV.
+
+        Parameters
+        ----------
+        roi : list | tuple | str
+            Bounding box [min_lon, min_lat, max_lon, max_lat] or vector file path.
+            When a vector file is provided, stations are filtered to those whose
+            point locations fall inside the vector geometry (not just its bbox).
+        variables_list : list[str] | tuple[str] | None
+            Optional and ignored for station discovery/download scope. The
+            method downloads all available station data for the requested
+            dataset/date range.
+        start_date : str
+            ISO date string (YYYY-MM-DD) for request start.
+        end_date : str
+            ISO date string (YYYY-MM-DD) for request end.
+        dataset : str, optional
+            NOAA dataset id exposed by data-service API. Default is "global-hourly".
+        separate_stations : bool, optional
+            When True (default), write one CSV per station. If False, write one
+            combined CSV with all discovered stations.
+        output_folder : str, optional
+            Folder where output CSV file(s) are written.
+        include_attributes : bool, optional
+            Forwarded to NOAA ``includeAttributes`` parameter.
+        units : str | None, optional
+            NOAA units conversion: "metric" or "standard".
+        timeout : int | float, optional
+            HTTP timeout in seconds for NOAA requests.
+        verbose : bool, optional
+            Print progress information.
+
+        Returns
+        -------
+        dict
+            {
+              "dataset": str,
+              "bbox": [min_lon, min_lat, max_lon, max_lat],
+              "stations_count": int,
+              "station_ids": list[str],
+              "separate_stations": bool,
+              "output_files": list[str],
+            }
+        """
+        if roi is None:
+            raise ValueError("roi is required and must be a bbox or vector file path.")
+        if variables_list is not None and not isinstance(variables_list, (list, tuple)):
+            raise ValueError("variables_list must be None, list, or tuple.")
+        if not start_date or not end_date:
+            raise ValueError("start_date and end_date are required.")
+        if not dataset:
+            raise ValueError("dataset is required.")
+        if units is not None and units not in {"metric", "standard"}:
+            raise ValueError("units must be None, 'metric', or 'standard'.")
+
+        roi_geometry = None
+        if isinstance(roi, str):
+            try:
+                ext = os.path.splitext(roi)[1].lower()
+                if ext == ".parquet":
+                    roi_gdf = gpd.read_parquet(roi)
+                else:
+                    roi_gdf = gpd.read_file(roi)
+                if roi_gdf.crs is None or roi_gdf.crs.to_epsg() != 4326:
+                    roi_gdf = roi_gdf.to_crs(epsg=4326)
+                roi_geometry = roi_gdf.unary_union
+            except Exception as exc:
+                raise RuntimeError(f"Could not read roi vector geometry for polygon filtering: {exc}") from exc
+
+        bbox = self._roi_to_bbox_list(roi)
+        if bbox is None:
+            raise ValueError("Could not resolve bbox from roi.")
+
+        min_lon, min_lat, max_lon, max_lat = bbox
+        # NOAA API expects bbox as N,W,S,E.
+        noaa_bbox = f"{max_lat},{min_lon},{min_lat},{max_lon}"
+
+        os.makedirs(output_folder, exist_ok=True)
+
+        endpoint = "https://www.ncei.noaa.gov/access/services/data/v1"
+        search_endpoint = "https://www.ncei.noaa.gov/access/services/search/v1/data"
+
+        def _bool01(v):
+            return "1" if bool(v) else "0"
+
+        def _safe_station_token(station_id):
+            sid = str(station_id).strip()
+            return re.sub(r"[^A-Za-z0-9._-]+", "_", sid) or "unknown_station"
+
+        station_id_candidates = (
+            "station",
+            "STATION",
+            "stationId",
+            "stationID",
+            "station_id",
+            "STATION_ID",
+            "id",
+            "ID",
+        )
+        station_name_candidates = (
+            "name",
+            "NAME",
+            "stationName",
+            "station_name",
+            "STATION_NAME",
+        )
+        lat_candidates = ("latitude", "LATITUDE", "lat", "LAT")
+        lon_candidates = ("longitude", "LONGITUDE", "lon", "LON")
+
+        def _extract_first(row, keys):
+            for k in keys:
+                if k in row and row[k] not in (None, ""):
+                    return row[k]
+            return None
+
+        def _normalize_station_id(value):
+            if value in (None, ""):
+                return None
+            sid = str(value).strip()
+            if not sid:
+                return None
+            if ":" in sid:
+                sid = sid.split(":")[-1].strip()
+            if sid.lower().endswith(".csv"):
+                sid = sid[:-4].strip()
+            sid = sid.strip("'\" ")
+            if not sid:
+                return None
+            if re.search(r"[^A-Za-z0-9._:-]", sid):
+                return None
+            return sid
+
+        base_params = {
+            "dataset": dataset,
+            "startDate": str(start_date),
+            "endDate": str(end_date),
+            "bbox": noaa_bbox,
+            "includeAttributes": _bool01(include_attributes),
+            "includeStationName": "1",
+            "includeStationLocation": "1",
+        }
+        if units is not None:
+            base_params["units"] = units
+
+        discover_params = dict(base_params)
+        discover_params["format"] = "json"
+
+        def _extract_station_ids_recursive(obj, out_set):
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    lk = str(k).lower()
+                    if (
+                        lk in {"station", "stationid", "station_id", "id"}
+                        and not isinstance(v, (dict, list, tuple, set))
+                        and v not in (None, "")
+                    ):
+                        out_set.add(str(v).strip())
+                    elif lk == "stations" and v not in (None, ""):
+                        if isinstance(v, str):
+                            for sid in v.split(","):
+                                sid = sid.strip()
+                                if sid:
+                                    out_set.add(sid)
+                        elif isinstance(v, (list, tuple, set)):
+                            for sid in v:
+                                if sid not in (None, ""):
+                                    out_set.add(str(sid).strip())
+                        elif isinstance(v, dict):
+                            buckets = v.get("buckets")
+                            if isinstance(buckets, list):
+                                for b in buckets:
+                                    if isinstance(b, dict):
+                                        sid = b.get("key") or b.get("station") or b.get("id")
+                                        if sid not in (None, ""):
+                                            out_set.add(str(sid).strip())
+                    _extract_station_ids_recursive(v, out_set)
+            elif isinstance(obj, (list, tuple, set)):
+                for it in obj:
+                    _extract_station_ids_recursive(it, out_set)
+
+        def _rows_from_payload(payload):
+            if isinstance(payload, list):
+                return payload
+            if isinstance(payload, dict):
+                for key in ("results", "data", "items", "stations"):
+                    rows = payload.get(key)
+                    if isinstance(rows, list):
+                        return rows
+                return [payload]
+            return []
+
+        if verbose:
+            print("[download_in_situ_data_noaa] Discovering stations in ROI...")
+
+        records = []
+        station_ids_fallback = set()
+        try:
+            discover_resp = requests.get(endpoint, params=discover_params, timeout=timeout)
+            discover_resp.raise_for_status()
+            try:
+                discover_payload = discover_resp.json()
+            except Exception as exc:
+                raise RuntimeError("NOAA discovery response is not valid JSON.") from exc
+            records = _rows_from_payload(discover_payload)
+            _extract_station_ids_recursive(discover_payload, station_ids_fallback)
+        except requests.HTTPError as exc:
+            body = ""
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            try:
+                body = exc.response.text[:1000] if getattr(exc, "response", None) is not None else ""
+            except Exception:
+                pass
+
+            # NOAA may reject bbox discovery on data/v1 and require explicit stations.
+            if status_code == 400 and "station is required" in body.lower():
+                search_params = {
+                    "dataset": dataset,
+                    "startDate": str(start_date),
+                    "endDate": str(end_date),
+                    "bbox": noaa_bbox,
+                    "limit": 1000,
+                    "offset": 0,
+                }
+                try:
+                    search_resp = requests.get(search_endpoint, params=search_params, timeout=timeout)
+                    search_resp.raise_for_status()
+                    search_payload = search_resp.json()
+                    records = _rows_from_payload(search_payload)
+                    _extract_station_ids_recursive(search_payload, station_ids_fallback)
+                except Exception as search_exc:
+                    raise RuntimeError(
+                        "NOAA discovery request failed: data/v1 requires stations and "
+                        f"search fallback failed ({search_exc})."
+                    ) from search_exc
+            else:
+                raise RuntimeError(
+                    f"NOAA discovery request failed: HTTP {status_code if status_code is not None else 'unknown'} - {body}"
+                ) from exc
+        except Exception as exc:
+            raise RuntimeError(f"NOAA discovery request failed: {exc}") from exc
+
+        stations_meta = {}
+        for row in records:
+            if not isinstance(row, dict):
+                continue
+            station_id = _normalize_station_id(_extract_first(row, station_id_candidates))
+            if station_id is None:
+                continue
+            if station_id not in stations_meta:
+                stations_meta[station_id] = {
+                    "station_id": station_id,
+                    "station_name": _extract_first(row, station_name_candidates),
+                    "latitude": _extract_first(row, lat_candidates),
+                    "longitude": _extract_first(row, lon_candidates),
+                }
+
+        if station_ids_fallback:
+            for sid in station_ids_fallback:
+                nsid = _normalize_station_id(sid)
+                if nsid is None or nsid in stations_meta:
+                    continue
+                stations_meta[nsid] = {
+                    "station_id": nsid,
+                    "station_name": None,
+                    "latitude": None,
+                    "longitude": None,
+                }
+
+        # Enrich station metadata (name/lat/lon) using NOAA data endpoint.
+        # Search/discovery responses may not include station coordinates.
+        station_ids_for_enrich = sorted(stations_meta.keys())
+        if station_ids_for_enrich:
+            preferred_fallback_vars = ["TMAX", "TMIN", "PRCP", "TAVG", "AWND"]
+            enrich_data_types = []
+            for v in preferred_fallback_vars:
+                if v and v not in enrich_data_types:
+                    enrich_data_types.append(v)
+            if not enrich_data_types:
+                enrich_data_types = ["TMAX"]
+
+            batch_size = 80
+            batch_starts = list(range(0, len(station_ids_for_enrich), batch_size))
+            enrich_iter = tqdm(batch_starts, desc="NOAA metadata enrichment", unit="batch")
+            for i in enrich_iter:
+                batch = station_ids_for_enrich[i:i + batch_size]
+                for dt_var in enrich_data_types:
+                    enrich_params = {
+                        "dataset": dataset,
+                        "stations": ",".join(batch),
+                        "startDate": str(start_date),
+                        "endDate": str(end_date),
+                        "dataTypes": dt_var,
+                        "includeStationName": "1",
+                        "includeStationLocation": "1",
+                        "format": "json",
+                    }
+                    try:
+                        enrich_resp = requests.get(endpoint, params=enrich_params, timeout=timeout)
+                        enrich_resp.raise_for_status()
+                        enrich_rows = enrich_resp.json()
+                        if not isinstance(enrich_rows, list):
+                            continue
+                        for erow in enrich_rows:
+                            if not isinstance(erow, dict):
+                                continue
+                            sid = _normalize_station_id(_extract_first(erow, station_id_candidates))
+                            if sid is None or sid not in stations_meta:
+                                continue
+                            if stations_meta[sid].get("station_name") in (None, ""):
+                                stations_meta[sid]["station_name"] = _extract_first(erow, station_name_candidates)
+                            if stations_meta[sid].get("latitude") in (None, ""):
+                                stations_meta[sid]["latitude"] = _extract_first(erow, lat_candidates)
+                            if stations_meta[sid].get("longitude") in (None, ""):
+                                stations_meta[sid]["longitude"] = _extract_first(erow, lon_candidates)
+                    except Exception as exc:
+                        if verbose:
+                            print(
+                                "[download_in_situ_data_noaa] Metadata enrichment batch failed "
+                                f"for stations {i}..{min(i + batch_size - 1, len(station_ids_for_enrich) - 1)} "
+                                f"using dataType={dt_var}: {exc}"
+                            )
+
+                if verbose:
+                    enriched_coords = 0
+                    for sid in batch:
+                        lat = stations_meta.get(sid, {}).get("latitude")
+                        lon = stations_meta.get(sid, {}).get("longitude")
+                        if lat not in (None, "") and lon not in (None, ""):
+                            enriched_coords += 1
+                    print(
+                        "[download_in_situ_data_noaa] Metadata enrichment batch "
+                        f"{i}..{min(i + batch_size - 1, len(station_ids_for_enrich) - 1)}: "
+                        f"{enriched_coords}/{len(batch)} station(s) with coordinates"
+                    )
+                enrich_iter.set_postfix_str(
+                    f"coords {sum(1 for sid in batch if stations_meta.get(sid, {}).get('latitude') not in (None, '') and stations_meta.get(sid, {}).get('longitude') not in (None, ''))}/{len(batch)}"
+                )
+
+        if roi_geometry is not None and stations_meta:
+            stations_df_filter = pd.DataFrame(stations_meta.values())
+            stations_df_filter["latitude"] = pd.to_numeric(stations_df_filter.get("latitude"), errors="coerce")
+            stations_df_filter["longitude"] = pd.to_numeric(stations_df_filter.get("longitude"), errors="coerce")
+            stations_df_filter = stations_df_filter.dropna(subset=["latitude", "longitude"]).copy()
+
+            if not stations_df_filter.empty:
+                stations_points = gpd.GeoDataFrame(
+                    stations_df_filter,
+                    geometry=gpd.points_from_xy(
+                        stations_df_filter["longitude"],
+                        stations_df_filter["latitude"],
+                        crs="EPSG:4326",
+                    ),
+                    crs="EPSG:4326",
+                )
+                inside_mask = stations_points.intersects(roi_geometry)
+                keep_ids = set(stations_points.loc[inside_mask, "station_id"].astype(str).tolist())
+                before_count = len(stations_meta)
+                stations_meta = {k: v for k, v in stations_meta.items() if str(k) in keep_ids}
+                if verbose:
+                    print(
+                        "[download_in_situ_data_noaa] Vector ROI filter applied: "
+                        f"{len(stations_meta)} of {before_count} station(s) inside polygon geometry."
+                    )
+            else:
+                if verbose:
+                    print(
+                        "[download_in_situ_data_noaa] Vector ROI filter skipped: "
+                        "no station coordinates available after metadata enrichment."
+                    )
+
+        station_ids = sorted(stations_meta.keys())
+        if verbose:
+            print(f"[download_in_situ_data_noaa] Stations found: {len(station_ids)}")
+
+        if not station_ids:
+            return {
+                "dataset": dataset,
+                "bbox": bbox,
+                "stations_count": 0,
+                "station_ids": [],
+                "separate_stations": bool(separate_stations),
+                "output_files": [],
+            }
+
+        output_files = []
+
+        if separate_stations:
+            station_iter = tqdm(station_ids, desc="NOAA station downloads", unit="station")
+            for station_id in station_iter:
+                params = dict(base_params)
+                params["stations"] = station_id
+                params["format"] = "csv"
+                if verbose:
+                    print(f"[download_in_situ_data_noaa] Downloading station: {station_id}")
+                station_iter.set_postfix_str(station_id)
+
+                try:
+                    resp = requests.get(endpoint, params=params, timeout=timeout)
+                    resp.raise_for_status()
+                except requests.HTTPError as exc:
+                    raise RuntimeError(
+                        f"NOAA station download failed for '{station_id}': HTTP {resp.status_code} - {resp.text[:1000]}"
+                    ) from exc
+                except Exception as exc:
+                    raise RuntimeError(f"NOAA station download failed for '{station_id}': {exc}") from exc
+
+                station_token = _safe_station_token(station_id)
+                file_path = os.path.join(
+                    output_folder,
+                    f"noaa_{dataset}_{station_token}_{start_date}_{end_date}.csv",
+                )
+                with open(file_path, "wb") as fh:
+                    fh.write(resp.content)
+                output_files.append(file_path)
+        else:
+            params = dict(base_params)
+            params["stations"] = ",".join(station_ids)
+            params["format"] = "csv"
+            if verbose:
+                print(
+                    "[download_in_situ_data_noaa] Downloading combined CSV for "
+                    f"{len(station_ids)} station(s)..."
+                )
+
+            try:
+                resp = requests.get(endpoint, params=params, timeout=timeout)
+                resp.raise_for_status()
+            except requests.HTTPError as exc:
+                raise RuntimeError(
+                    f"NOAA combined download failed: HTTP {resp.status_code} - {resp.text[:1000]}"
+                ) from exc
+            except Exception as exc:
+                raise RuntimeError(f"NOAA combined download failed: {exc}") from exc
+
+            file_path = os.path.join(
+                output_folder,
+                f"noaa_{dataset}_combined_{start_date}_{end_date}.csv",
+            )
+            with open(file_path, "wb") as fh:
+                fh.write(resp.content)
+            output_files.append(file_path)
+
+        if verbose:
+            print(f"[download_in_situ_data_noaa] Saved {len(output_files)} file(s).")
+
+        return {
+            "dataset": dataset,
+            "bbox": bbox,
+            "stations_count": len(station_ids),
+            "station_ids": station_ids,
+            "separate_stations": bool(separate_stations),
+            "output_files": output_files,
+        }
+
+    def list_stations_noaa(
+        self,
+        roi,
+        dataset="global-hourly",
+        start_date=None,
+        end_date=None,
+        limit=5000,
+        timeout=120,
+        verbose=True,
+        export=False,
+        output_file="data/noaa/noaa_station_variable_report.txt",
+    ):
+        """
+        List NOAA stations and available variables for a given ROI.
+
+        Parameters
+        ----------
+        roi : list | tuple | str
+            Bounding box [min_lon, min_lat, max_lon, max_lat] or vector file path.
+        dataset : str, optional
+            NOAA dataset id to query. Default is "global-hourly".
+            Common dataset ids include:
+            - "global-hourly"
+            - "daily-summaries"
+            - "global-summary-of-the-day"
+            - "global-summary-of-the-month"
+            - "global-summary-of-the-year"
+            Use a dataset id supported by NOAA Access Search Service for your
+            target variables and period.
+        start_date : str | None, optional
+            Optional ISO date (YYYY-MM-DD) to constrain station/variable discovery.
+        end_date : str | None, optional
+            Optional ISO date (YYYY-MM-DD) to constrain station/variable discovery.
+        limit : int, optional
+            Search-service limit forwarded to NOAA. Higher values may improve
+            fallback extraction from ``results``.
+        timeout : int | float, optional
+            HTTP timeout in seconds for NOAA requests.
+        verbose : bool, optional
+            Print progress information.
+        export : bool, optional
+            If True, export the station/variable report to a text file.
+        output_file : str, optional
+            Text report path used when ``export=True``. The stations parquet file
+            is written alongside it using the same base name with
+            ``_stations.parquet`` suffix as GeoParquet (EPSG:4326).
+
+        Returns
+        -------
+        dict
+            {
+              "dataset": str,
+              "bbox": [min_lon, min_lat, max_lon, max_lat],
+              "start_date": str | None,
+              "end_date": str | None,
+              "stations_count": int,
+              "variables_count": int,
+              "stations": list[dict],
+              "variables": list[dict],
+              "total_count": int | None,
+              "report_file": str | None,
+                            "stations_parquet_file": str | None,
+            }
+        """
+        if roi is None:
+            raise ValueError("roi is required and must be a bbox or vector file path.")
+        if not dataset:
+            raise ValueError("dataset is required.")
+        if start_date and not end_date:
+            raise ValueError("end_date is required when start_date is provided.")
+        if end_date and not start_date:
+            raise ValueError("start_date is required when end_date is provided.")
+
+        roi_geometry = None
+        if isinstance(roi, str):
+            try:
+                ext = os.path.splitext(roi)[1].lower()
+                if ext == ".parquet":
+                    roi_gdf = gpd.read_parquet(roi)
+                else:
+                    roi_gdf = gpd.read_file(roi)
+                if roi_gdf.crs is None or roi_gdf.crs.to_epsg() != 4326:
+                    roi_gdf = roi_gdf.to_crs(epsg=4326)
+                roi_geometry = roi_gdf.unary_union
+            except Exception as exc:
+                raise RuntimeError(f"Could not read roi vector geometry for polygon filtering: {exc}") from exc
+
+        bbox = self._roi_to_bbox_list(roi)
+        if bbox is None:
+            raise ValueError("Could not resolve bbox from roi.")
+
+        min_lon, min_lat, max_lon, max_lat = bbox
+        # NOAA API expects bbox as N,W,S,E.
+        noaa_bbox = f"{max_lat},{min_lon},{min_lat},{max_lon}"
+
+        endpoint = "https://www.ncei.noaa.gov/access/services/search/v1/data"
+
+        if verbose:
+            print("[list_stations_noaa] Querying NOAA search service...")
+
+        params = {
+            "dataset": dataset,
+            "bbox": noaa_bbox,
+            "limit": int(limit),
+            "offset": 0,
+        }
+        if start_date and end_date:
+            params["startDate"] = str(start_date)
+            params["endDate"] = str(end_date)
+
+        try:
+            resp = requests.get(endpoint, params=params, timeout=timeout)
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            body = ""
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            try:
+                body = exc.response.text[:1000] if getattr(exc, "response", None) is not None else ""
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"NOAA station/variable listing failed: HTTP {status_code if status_code is not None else 'unknown'} - {body}"
+            ) from exc
+        except Exception as exc:
+            raise RuntimeError(f"NOAA station/variable listing failed: {exc}") from exc
+
+        try:
+            payload = resp.json()
+        except Exception as exc:
+            raise RuntimeError("NOAA search response is not valid JSON.") from exc
+
+        if not isinstance(payload, dict):
+            raise RuntimeError("NOAA search response did not return a JSON object.")
+
+        station_name_candidates = (
+            "name",
+            "NAME",
+            "stationName",
+            "station_name",
+            "STATION_NAME",
+        )
+        station_id_candidates = (
+            "station",
+            "STATION",
+            "stationId",
+            "stationID",
+            "station_id",
+            "STATION_ID",
+            "id",
+            "ID",
+        )
+        lat_candidates = ("latitude", "LATITUDE", "lat", "LAT")
+        lon_candidates = ("longitude", "LONGITUDE", "lon", "LON")
+
+        def _extract_first(row, keys):
+            for k in keys:
+                if k in row and row[k] not in (None, ""):
+                    return row[k]
+            return None
+
+        def _extract_datatype_entries(value):
+            """Return list of {'id': <datatype_id>, 'name': <datatype_name_or_none>} entries."""
+            out = []
+            if value in (None, ""):
+                return out
+
+            def _append_entry(dt_id, dt_name=None):
+                if dt_id in (None, ""):
+                    return
+                dt_id = str(dt_id).strip()
+                if not dt_id:
+                    return
+                if dt_name in (None, ""):
+                    out.append({"id": dt_id, "name": None})
+                else:
+                    out.append({"id": dt_id, "name": str(dt_name).strip()})
+
+            if isinstance(value, dict):
+                _append_entry(
+                    value.get("id") or value.get("key") or value.get("dataType"),
+                    value.get("name") or value.get("label") or value.get("description"),
+                )
+                return out
+
+            if isinstance(value, str):
+                for tok in value.split(","):
+                    tok = tok.strip()
+                    if tok:
+                        _append_entry(tok)
+                return out
+
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    if isinstance(item, dict):
+                        _append_entry(
+                            item.get("id") or item.get("key") or item.get("dataType"),
+                            item.get("name") or item.get("label") or item.get("description"),
+                        )
+                    elif item not in (None, ""):
+                        _append_entry(str(item).strip())
+                return out
+
+            _append_entry(str(value).strip())
+            return out
+
+        def _normalize_station_id(value):
+            if value in (None, ""):
+                return None
+            sid = str(value).strip()
+            if not sid:
+                return None
+            if ":" in sid:
+                sid = sid.split(":")[-1].strip()
+            if sid.lower().endswith(".csv"):
+                sid = sid[:-4].strip()
+            sid = sid.strip("'\" ")
+            if not sid:
+                return None
+            # Keep practical NOAA ids; reject obvious non-id payload artifacts.
+            if re.search(r"[^A-Za-z0-9._:-]", sid):
+                return None
+            return sid
+
+        stations_map = {}
+        variables_map = {}
+
+        station_buckets = ((payload.get("stations") or {}).get("buckets") if isinstance(payload.get("stations"), dict) else None)
+        if isinstance(station_buckets, list):
+            for b in station_buckets:
+                if not isinstance(b, dict):
+                    continue
+                sid = _normalize_station_id(b.get("key") or b.get("station") or b.get("id"))
+                if sid is None:
+                    continue
+                stations_map[sid] = {
+                    "station_id": sid,
+                    "station_name": None,
+                    "latitude": None,
+                    "longitude": None,
+                    "records_count": int(b.get("docCount", 0)) if str(b.get("docCount", "")).isdigit() else b.get("docCount"),
+                }
+
+        data_type_buckets = ((payload.get("dataTypes") or {}).get("buckets") if isinstance(payload.get("dataTypes"), dict) else None)
+        if isinstance(data_type_buckets, list):
+            for b in data_type_buckets:
+                if not isinstance(b, dict):
+                    continue
+                dt_raw = b.get("key") or b.get("dataType") or b.get("id")
+                dts = _extract_datatype_entries(dt_raw)
+                if not dts:
+                    continue
+                for dt in dts:
+                    dt_id = dt["id"]
+                    variables_map[dt_id] = {
+                        "variable": dt_id,
+                        "variable_name": dt.get("name"),
+                        "records_count": int(b.get("docCount", 0)) if str(b.get("docCount", "")).isdigit() else b.get("docCount"),
+                    }
+
+        results = payload.get("results") if isinstance(payload.get("results"), list) else []
+        for row in results:
+            if not isinstance(row, dict):
+                continue
+
+            station_id = _normalize_station_id(_extract_first(row, station_id_candidates))
+            if station_id is not None:
+                if station_id not in stations_map:
+                    stations_map[station_id] = {
+                        "station_id": station_id,
+                        "station_name": _extract_first(row, station_name_candidates),
+                        "latitude": _extract_first(row, lat_candidates),
+                        "longitude": _extract_first(row, lon_candidates),
+                        "records_count": None,
+                    }
+                else:
+                    if stations_map[station_id].get("station_name") in (None, ""):
+                        stations_map[station_id]["station_name"] = _extract_first(row, station_name_candidates)
+                    if stations_map[station_id].get("latitude") in (None, ""):
+                        stations_map[station_id]["latitude"] = _extract_first(row, lat_candidates)
+                    if stations_map[station_id].get("longitude") in (None, ""):
+                        stations_map[station_id]["longitude"] = _extract_first(row, lon_candidates)
+
+            for key in ("dataTypes", "dataType", "datatype", "datatypes"):
+                for dt in _extract_datatype_entries(row.get(key)):
+                    dt_id = dt["id"]
+                    if dt_id not in variables_map:
+                        variables_map[dt_id] = {
+                            "variable": dt_id,
+                            "variable_name": dt.get("name"),
+                            "records_count": None,
+                        }
+                    elif variables_map[dt_id].get("variable_name") in (None, "") and dt.get("name") not in (None, ""):
+                        variables_map[dt_id]["variable_name"] = dt.get("name")
+
+        # Enrich station metadata (name/lat/lon) using NOAA data endpoint.
+        # Search service often returns station ids without station coordinates.
+        if stations_map and start_date and end_date:
+            enrich_endpoint = "https://www.ncei.noaa.gov/access/services/data/v1"
+            station_ids_for_enrich = sorted(stations_map.keys())
+            candidate_vars = sorted([str(v).strip() for v in variables_map.keys() if str(v).strip()])
+            preferred_vars = ["TMAX", "TMIN", "PRCP", "TAVG", "AWND"]
+            data_type_for_enrich = next((v for v in preferred_vars if v in candidate_vars), None)
+            if data_type_for_enrich is None:
+                data_type_for_enrich = next(
+                    (v for v in candidate_vars if re.fullmatch(r"[A-Za-z0-9_-]+", v)),
+                    "TMAX",
+                )
+
+            batch_size = 80
+            for i in range(0, len(station_ids_for_enrich), batch_size):
+                batch = station_ids_for_enrich[i:i + batch_size]
+                enrich_params = {
+                    "dataset": dataset,
+                    "stations": ",".join(batch),
+                    "startDate": str(start_date),
+                    "endDate": str(end_date),
+                    "dataTypes": data_type_for_enrich,
+                    "includeStationName": "1",
+                    "includeStationLocation": "1",
+                    "format": "json",
+                }
+                try:
+                    enrich_resp = requests.get(enrich_endpoint, params=enrich_params, timeout=timeout)
+                    enrich_resp.raise_for_status()
+                    enrich_rows = enrich_resp.json()
+                    if not isinstance(enrich_rows, list):
+                        continue
+                    for erow in enrich_rows:
+                        if not isinstance(erow, dict):
+                            continue
+                        sid = _normalize_station_id(_extract_first(erow, station_id_candidates))
+                        if sid is None or sid not in stations_map:
+                            continue
+                        existing_name = stations_map[sid].get("station_name")
+                        enriched_name = _extract_first(erow, station_name_candidates)
+                        if existing_name in (None, ""):
+                            stations_map[sid]["station_name"] = enriched_name
+                        elif isinstance(existing_name, str):
+                            low = existing_name.lower()
+                            if low.endswith(".csv") or ".tar.gz:" in low:
+                                stations_map[sid]["station_name"] = enriched_name
+                        if stations_map[sid].get("latitude") in (None, ""):
+                            stations_map[sid]["latitude"] = _extract_first(erow, lat_candidates)
+                        if stations_map[sid].get("longitude") in (None, ""):
+                            stations_map[sid]["longitude"] = _extract_first(erow, lon_candidates)
+                except Exception as exc:
+                    if verbose:
+                        print(
+                            "[list_stations_noaa] Metadata enrichment batch failed "
+                            f"for stations {i}..{min(i + batch_size - 1, len(station_ids_for_enrich) - 1)}: {exc}"
+                        )
+
+        if roi_geometry is not None and stations_map:
+            stations_df_filter = pd.DataFrame(stations_map.values())
+            stations_df_filter["latitude"] = pd.to_numeric(stations_df_filter.get("latitude"), errors="coerce")
+            stations_df_filter["longitude"] = pd.to_numeric(stations_df_filter.get("longitude"), errors="coerce")
+            stations_df_filter = stations_df_filter.dropna(subset=["latitude", "longitude"]).copy()
+
+            if not stations_df_filter.empty:
+                stations_points = gpd.GeoDataFrame(
+                    stations_df_filter,
+                    geometry=gpd.points_from_xy(
+                        stations_df_filter["longitude"],
+                        stations_df_filter["latitude"],
+                        crs="EPSG:4326",
+                    ),
+                    crs="EPSG:4326",
+                )
+                inside_mask = stations_points.intersects(roi_geometry)
+                keep_ids = set(stations_points.loc[inside_mask, "station_id"].astype(str).tolist())
+            else:
+                keep_ids = set()
+
+            before_count = len(stations_map)
+            stations_map = {k: v for k, v in stations_map.items() if str(k) in keep_ids}
+            if verbose:
+                print(
+                    "[list_stations_noaa] Vector ROI filter applied: "
+                    f"{len(stations_map)} of {before_count} station(s) inside polygon geometry."
+                )
+
+        stations = sorted(stations_map.values(), key=lambda x: str(x.get("station_id", "")))
+        variables = sorted(
+            [
+                v
+                for v in variables_map.values()
+                if re.fullmatch(r"[A-Za-z0-9_-]+", str(v.get("variable", "")).strip())
+            ],
+            key=lambda x: str(x.get("variable", "")),
+        )
+
+        report_file = None
+        stations_parquet_file = None
+        if export:
+            folder = os.path.dirname(output_file)
+            if folder:
+                os.makedirs(folder, exist_ok=True)
+
+            if hasattr(datetime, "datetime"):
+                timestamp_utc = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+            else:
+                timestamp_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+            lines = [
+                "NOAA Station and Variable Discovery Report",
+                "=" * 42,
+                f"Generated: {timestamp_utc}",
+                f"Dataset: {dataset}",
+                f"BBox [min_lon,min_lat,max_lon,max_lat]: {bbox}",
+                f"NOAA bbox (N,W,S,E): {noaa_bbox}",
+                f"Date range: {start_date if start_date else 'not specified'} -> {end_date if end_date else 'not specified'}",
+                f"Stations found: {len(stations)}",
+                f"Variables found: {len(variables)}",
+                "",
+                "Available Variables:",
+            ]
+            if variables:
+                for v in variables:
+                    vname = v.get("variable_name")
+                    if vname not in (None, ""):
+                        lines.append(f"- {v['variable']} - {vname} (records_count={v.get('records_count')})")
+                    else:
+                        lines.append(f"- {v['variable']} (records_count={v.get('records_count')})")
+            else:
+                lines.append("- None")
+
+            lines.append("")
+            lines.append("Available Stations:")
+            if stations:
+                for s in stations:
+                    sid = s.get("station_id")
+                    sname = s.get("station_name")
+                    lat = s.get("latitude")
+                    lon = s.get("longitude")
+                    rc = s.get("records_count")
+                    lines.append(
+                        f"- {sid} | name={sname} | lat={lat} | lon={lon} | records_count={rc}"
+                    )
+            else:
+                lines.append("- None")
+
+            with open(output_file, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
+            report_file = output_file
+
+            parquet_root, _ = os.path.splitext(output_file)
+            stations_parquet_file = f"{parquet_root}_stations.parquet"
+            try:
+                stations_df = pd.DataFrame(stations)
+                if "latitude" in stations_df.columns:
+                    stations_df["latitude"] = pd.to_numeric(stations_df["latitude"], errors="coerce")
+                if "longitude" in stations_df.columns:
+                    stations_df["longitude"] = pd.to_numeric(stations_df["longitude"], errors="coerce")
+
+                # Export as GeoParquet so GIS software can load geometry directly.
+                stations_gdf = gpd.GeoDataFrame(
+                    stations_df,
+                    geometry=gpd.points_from_xy(
+                        stations_df["longitude"],
+                        stations_df["latitude"],
+                        crs="EPSG:4326",
+                    ),
+                    crs="EPSG:4326",
+                )
+                stations_gdf.to_parquet(stations_parquet_file, index=False)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to export NOAA stations parquet: {stations_parquet_file} ({exc})"
+                ) from exc
+
+        if verbose:
+            print(f"[list_stations_noaa] Stations found: {len(stations)}")
+            print(f"[list_stations_noaa] Variables found: {len(variables)}")
+            if report_file:
+                print(f"[list_stations_noaa] Report exported to: {report_file}")
+            if stations_parquet_file:
+                print(f"[list_stations_noaa] Stations parquet exported to: {stations_parquet_file}")
+
+        return {
+            "dataset": dataset,
+            "bbox": bbox,
+            "start_date": start_date,
+            "end_date": end_date,
+            "stations_count": len(stations),
+            "variables_count": len(variables),
+            "stations": stations,
+            "variables": variables,
+            "total_count": payload.get("totalCount", payload.get("count")),
+            "report_file": report_file,
+            "stations_parquet_file": stations_parquet_file,
+        }
            
     
     """def learn_error(self,):
