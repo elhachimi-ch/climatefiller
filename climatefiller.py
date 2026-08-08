@@ -370,6 +370,31 @@ class ClimateFiller():
 
         return dataframe
 
+    def _prepare_datetime_column(self, dataframe, datetime_column_name=None):
+        if datetime_column_name is None:
+            datetime_column_name = self.datetime_column_name
+
+        if dataframe is None:
+            return None
+
+        if not isinstance(dataframe, pd.DataFrame):
+            dataframe = pd.DataFrame(dataframe)
+
+        source_name = None
+        for candidate in [datetime_column_name, 'datetime', 'date']:
+            if candidate in dataframe.columns:
+                source_name = candidate
+                break
+
+        if source_name is None:
+            return dataframe
+
+        prepared = dataframe.copy()
+        prepared = prepared.rename(columns={source_name: 'datetime'})
+        prepared['datetime'] = pd.to_datetime(prepared['datetime'], errors='coerce')
+        prepared = prepared.set_index('datetime').sort_index()
+        return prepared
+
     def __getattr__(self, name):
         if name.startswith('__') and name.endswith('__'):
             raise AttributeError(name)
@@ -1785,10 +1810,7 @@ class ClimateFiller():
                         data.append_dataframe(data_year.dataframe)
                         
                     data.rename_columns({'first': 't2m'})
-                    data.reset_index()
-                    data.column_to_date('datetime')
-                    data.reindex_dataframe("datetime")
-                    data.set_dataframe(data.get_dataframe().sort_index())
+                    data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
                     data.missing_data('t2m')
                     data.transform_column('t2m', lambda o: o - 273.15)
                     data.drop_duplicated_indexes()
@@ -1809,9 +1831,7 @@ class ClimateFiller():
                         cache_path = self._resolve_era5_year_cache_path(era5_land_variables, lon, lat, year, frequency=target_frequency)
                         data_year = DataFrame(cache_path)
                         data.append_dataframe(data_year.dataframe)
-                    data.reset_index()
-                    data.column_to_date("datetime")
-                    data.reindex_dataframe("datetime")
+                    data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
                     data.rename_columns({'temperature_2m': 't2m', 'dewpoint_temperature_2m': 'd2m'})
                     data.missing_data('t2m')
                     data.missing_data('d2m')
@@ -1835,9 +1855,7 @@ class ClimateFiller():
                         cache_path = self._resolve_era5_year_cache_path(era5_land_variables, lon, lat, year, frequency=target_frequency)
                         data_year = DataFrame(cache_path)
                         data.append_dataframe(data_year.dataframe)
-                    data.reset_index()
-                    data.column_to_date("datetime")
-                    data.reindex_dataframe("datetime")
+                    data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
                     data.rename_columns({'u_component_of_wind_10m': 'u10', 'v_component_of_wind_10m': 'v10'})
                   
                     data.add_column_based_on_function('era5_ws', lambda row: Lib.logarithmic_wind_profile(row['u10'], row['v10']))
@@ -1861,9 +1879,7 @@ class ClimateFiller():
                         data.append_dataframe(data_year.dataframe)
                         
                     data.rename_columns({'first': 'ssrd'})
-                    data.reset_index()
-                    data.column_to_date('datetime')
-                    data.reindex_dataframe("datetime")
+                    data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
                     data.missing_data('ssrd')
                     l = []
                     for p in data.get_index():
@@ -1898,12 +1914,8 @@ class ClimateFiller():
                         data_year = DataFrame(cache_path)
                         data.append_dataframe(data_year.dataframe)
                         
-                    data.rename_columns({'first': 'tp'})    
-                    
-                    data.reset_index()
-                    data.column_to_date('datetime')
-                    data.reindex_dataframe("datetime")
-                    data.set_dataframe(data.get_dataframe().sort_index())
+                    data.rename_columns({'first': 'tp'})
+                    data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
                     data.missing_data('tp')
                     nan_indices = self.data.get_nan_indexes_of_column(target_column_to_fill_name)
                     data.drop_duplicated_indexes()
@@ -1941,11 +1953,7 @@ class ClimateFiller():
                         data_year = DataFrame(cache_path)
                         data.append_dataframe(data_year.dataframe)
 
-                    data.reset_index()
-                    if 'datetime' in data.get_dataframe().columns:
-                        data.column_to_date('datetime')
-                        data.reindex_dataframe('datetime')
-                    data.set_dataframe(data.get_dataframe().sort_index())
+                    data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
 
                     remote_series = self._extract_remote_series(
                         data.get_dataframe(),
@@ -3044,8 +3052,7 @@ class ClimateFiller():
                             
                             data.rename_columns({'first': 't2m'})
                             data.transform_column('t2m', lambda o: o - 273.15)
-                            data.column_to_date('datetime')
-                            data.reindex_dataframe('datetime')
+                            data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
                             end_date += timedelta(1)
                             data.select_datetime_range(start_date, end_date)
                             data.index_to_column()
@@ -3079,8 +3086,7 @@ class ClimateFiller():
                         else:
                             
                             data.rename_columns({'first': 'p5'})
-                            data.column_to_date('datetime')
-                            data.reindex_dataframe('datetime')
+                            data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
                             
                             l = []
                             for p in data.get_index():
@@ -3134,8 +3140,7 @@ class ClimateFiller():
                             data.transform_column('d2m', lambda o: o - 273.15)
                             data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
                             data.drop_columns(['t2m', 'd2m'])
-                            data.column_to_date('datetime')
-                            data.reindex_dataframe('datetime')
+                            data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
                             end_date += timedelta(1)
                             data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
                             data.export(output_file, index=True)
@@ -3167,8 +3172,7 @@ class ClimateFiller():
                         else:
                             output_file = 'data/' + '_'.join([variable, str(lon), str(lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
                             data.rename_columns({'first': 'ssrd'})
-                            data.column_to_date('datetime')
-                            data.reindex_dataframe('datetime')
+                            data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
                             
                             
                             l = []
@@ -3222,8 +3226,7 @@ class ClimateFiller():
                             data.rename_columns({'u_component_of_wind_10m': 'u10', 'v_component_of_wind_10m': 'v10'})
                             data.add_column_based_on_function('era5_ws', Lib.get_2m_wind_speed)
                             data.drop_columns(['u10', 'v10'])
-                            data.column_to_date('datetime')
-                            data.reindex_dataframe('datetime')
+                            data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
                             end_date += timedelta(1)
                             data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
                             data.export(output_file, index=True)
@@ -3252,8 +3255,7 @@ class ClimateFiller():
                             
                         
                         output_file = 'data/era5_land_' + '_'.join(variable + [str(self.lon), str(self.lat), str(start_date.strftime('%Y-%m-%d')), str(end_date.strftime('%Y-%m-%d'))]) + '.csv'
-                        data.column_to_date('datetime')
-                        data.reindex_dataframe('datetime')
+                        data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
                         end_date += timedelta(1)
                         data.select_datetime_range(start_date.isoformat(), end_date.isoformat())
                         data.export(output_file, index=True)

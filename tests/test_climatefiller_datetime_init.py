@@ -156,6 +156,18 @@ def test_constructor_parses_timezone_suffixed_datetime_strings(tmp_path):
     assert str(cf.index[0]) == '2020-01-01 00:00:00+00:00'
 
 
+def test_prepare_datetime_column_infers_non_literal_source_column_names():
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    cf = ClimateFiller(pd.DataFrame({'date': ['2020-01-01 00:00:00'], 'value': [1.0]}), datetime_column_name='date', backend='local')
+    source_frame = pd.DataFrame({'date': ['2020-01-01 00:00:00', '2020-01-02 00:00:00'], 'value': [1.0, 2.0]})
+
+    prepared = cf._prepare_datetime_column(source_frame)
+
+    assert prepared.index.name == 'datetime'
+    assert prepared.shape[0] == 2
+
+
 def test_daily_column_names_resolve_to_expected_climate_variable_and_aggregation():
     os.environ.setdefault('GEE_PROJECT', 'dummy')
 
