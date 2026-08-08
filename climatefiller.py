@@ -1,4 +1,3 @@
-from data_science_toolkit.dataframe import DataFrame
 from data_science_toolkit.model import Model
 import datetime
 import json
@@ -30,6 +29,236 @@ from tqdm import tqdm
 LOGGER = logging.getLogger(__name__)
 if not LOGGER.handlers:
     logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+
+
+try:
+    from data_science_toolkit.dataframe import DataFrame as _ToolkitDataFrame
+except ImportError:  # pragma: no cover - fallback for minimal environments
+    class _FallbackDataFrame(pd.DataFrame):
+        def __init__(self, data_path=None, data_type=None, **kwargs):
+            if isinstance(data_path, pd.DataFrame):
+                super().__init__(data_path.copy())
+            elif isinstance(data_path, (str, os.PathLike)):
+                path_str = str(data_path)
+                lower_path = path_str.lower()
+                if lower_path.endswith('.parquet'):
+                    super().__init__(pd.read_parquet(path_str))
+                elif lower_path.endswith('.csv'):
+                    super().__init__(pd.read_csv(path_str))
+                elif lower_path.endswith('.json'):
+                    super().__init__(pd.read_json(path_str))
+                elif lower_path.endswith('.xlsx') or lower_path.endswith('.xls'):
+                    super().__init__(pd.read_excel(path_str))
+                else:
+                    super().__init__()
+            else:
+                super().__init__()
+            self.data_type = data_type or 'df'
+            self.dataset = None
+            self.last_export_path = None
+            self.last_export_data_type = None
+            self.last_export_kwargs = None
+
+        @property
+        def _constructor(self):
+            return _FallbackDataFrame
+
+        def get_dataframe(self):
+            return self
+
+        def set_dataframe(self, dataframe, data_type='df'):
+            if isinstance(dataframe, _FallbackDataFrame):
+                super().__init__(dataframe.copy())
+            elif isinstance(dataframe, pd.DataFrame):
+                super().__init__(dataframe.copy())
+            elif hasattr(dataframe, 'dataframe'):
+                super().__init__(dataframe.dataframe.copy())
+            else:
+                super().__init__(pd.DataFrame(dataframe))
+            self.data_type = data_type
+            return self
+
+        def rename_columns(self, mapping):
+            self.rename(columns=mapping, inplace=True)
+            return self
+
+        def column_to_date(self, column_name, datetime_format='%Y-%m-%d %H:%M:%S', extraction_func=None):
+            if column_name not in self.columns:
+                raise KeyError(column_name)
+            if extraction_func is not None:
+                values = self[column_name].apply(extraction_func)
+            else:
+                raw_values = self[column_name]
+                try:
+                    values = pd.to_datetime(raw_values, format=datetime_format)
+                except (TypeError, ValueError):
+                    try:
+                        values = pd.to_datetime(raw_values, format='ISO8601')
+                    except (TypeError, ValueError):
+                        try:
+                            values = pd.to_datetime(raw_values, utc=True, errors='coerce')
+                        except (TypeError, ValueError):
+                            values = pd.to_datetime(raw_values, errors='coerce')
+            self[column_name] = values
+            self.set_index(column_name, inplace=True)
+            return self
+
+        def reindex_dataframe(self, column_name):
+            if column_name in self.columns:
+                self.set_index(column_name, inplace=True)
+            elif self.index.name != column_name and column_name not in self.index.names:
+                self.index.name = column_name
+            if isinstance(self.index, pd.Index):
+                try:
+                    self.sort_index(inplace=True)
+                    self.index = pd.DatetimeIndex(self.index)
+                except Exception:
+                    pass
+            return self
+
+        def get_columns_names(self):
+            return list(self.columns)
+
+        def get_missing_data_indexes_in_column(self, column_name):
+            return self.index[self[column_name].isna()].tolist()
+
+        def set_row(self, column_name, row_index, value):
+            self.at[row_index, column_name] = value
+            return self
+
+        def export(self, path_link, data_type=None, *args, **kwargs):
+            self.last_export_path = path_link
+            self.last_export_data_type = data_type
+            self.last_export_kwargs = kwargs
+            path_str = str(path_link)
+            lower_path = path_str.lower()
+            if data_type in {'parquet', 'geoparquet', 'pq', 'pqt'} or lower_path.endswith(('.parquet', '.geoparquet', '.pq', '.pqt')):
+                self.to_parquet(path_str, index=kwargs.get('index', False))
+            elif data_type == 'csv' or lower_path.endswith('.csv'):
+                self.to_csv(path_str, index=kwargs.get('index', False))
+            elif data_type == 'json' or lower_path.endswith('.json'):
+                self.to_json(path_str, orient=kwargs.get('orient', 'records'))
+            elif data_type in {'xls', 'xlsx'} or lower_path.endswith(('.xlsx', '.xls')):
+                self.to_excel(path_str, index=kwargs.get('index', False))
+            return self
+
+        def append_dataframe(self, other):
+            return _FallbackDataFrame(pd.concat([self, other.get_dataframe() if hasattr(other, 'get_dataframe') else other], copy=False))
+
+        def join(self, other, how='left'):
+            return _FallbackDataFrame(super().join(other.get_dataframe() if hasattr(other, 'get_dataframe') else other, how=how))
+
+        def is_empty(self):
+            return self.empty
+
+        def drop_column(self, column_name):
+            self.drop(columns=[column_name], inplace=True)
+            return self
+
+        def get_column(self, column_name):
+            return self[column_name]
+
+        def get_columns(self, columns=None):
+            if columns is None:
+                return self
+            return self.loc[:, columns]
+
+        def add_column(self, column_name, values):
+            self[column_name] = values
+            return self
+
+        def add_column_based_on_function(self, column_name, func):
+            self[column_name] = self.apply(func, axis=1)
+            return self
+
+        def add_one_value_column(self, column_name, value):
+            self[column_name] = value
+            return self
+
+        def index_to_column(self, column_name=None):
+            if column_name is None:
+                column_name = self.index.name or 'index'
+            self.reset_index(inplace=True)
+            if column_name in self.columns:
+                self.rename(columns={column_name: column_name}, inplace=True)
+            return self
+
+        def add_doy_column(self, datetime_column_name=None):
+            if datetime_column_name is not None and datetime_column_name in self.columns:
+                self['doy'] = pd.to_datetime(self[datetime_column_name]).dt.dayofyear
+            else:
+                self['doy'] = self.index.dayofyear
+            return self
+
+        def add_year_column(self):
+            if self.index.name is not None:
+                self['year'] = pd.to_datetime(self.index).dt.year
+            else:
+                self['year'] = pd.Series([None] * len(self), index=self.index)
+            return self
+
+        def transform_column(self, column_name, func):
+            self[column_name] = self[column_name].transform(func)
+            return self
+
+        def filter_dataframe(self, column_name, constraint):
+            if column_name in self.columns:
+                return _FallbackDataFrame(self.loc[self[column_name] == constraint])
+            return _FallbackDataFrame(self)
+
+        def keep_columns(self, columns):
+            return _FallbackDataFrame(self.loc[:, columns])
+
+        def get_shape(self):
+            return self.shape
+
+        def get_nan_indexes_of_column(self, column_name):
+            return self.index[self[column_name].isna()].tolist()
+
+        def count_occurence_of_each_row(self, column_name):
+            return self[column_name].value_counts()
+
+        def resample_timeseries(self, frequency='D', agg='mean', in_place=False):
+            if not isinstance(self.index, pd.DatetimeIndex):
+                return self.copy()
+            resampled = self.resample(frequency).agg(agg)
+            if in_place:
+                self._update_inplace(resampled)
+                return self
+            return _FallbackDataFrame(resampled)
+
+    _ToolkitDataFrame = _FallbackDataFrame
+
+
+def _attach_dataframe_compat_methods(frame_cls):
+    if not hasattr(frame_cls, 'get_dataframe'):
+        def get_dataframe(self):
+            return getattr(self, 'dataframe', self)
+        frame_cls.get_dataframe = get_dataframe
+    if not hasattr(frame_cls, 'set_dataframe'):
+        def set_dataframe(self, dataframe, data_type='df'):
+            if hasattr(dataframe, 'get_dataframe'):
+                dataframe = dataframe.get_dataframe()
+            if isinstance(dataframe, pd.DataFrame):
+                self.dataframe = dataframe.copy()
+            else:
+                self.dataframe = pd.DataFrame(dataframe)
+            self.data_type = data_type
+            return self
+        frame_cls.set_dataframe = set_dataframe
+    if not hasattr(frame_cls, 'get_columns_names'):
+        def get_columns_names(self):
+            return list(getattr(self, 'dataframe', self).columns)
+        frame_cls.get_columns_names = get_columns_names
+    if not hasattr(frame_cls, 'rename_columns'):
+        def rename_columns(self, mapping):
+            getattr(self, 'dataframe', self).rename(columns=mapping, inplace=True)
+            return self
+        frame_cls.rename_columns = rename_columns
+    return frame_cls
+
+
+DataFrame = _attach_dataframe_compat_methods(_ToolkitDataFrame)
 
 
 class ClimateFiller():
@@ -71,6 +300,7 @@ class ClimateFiller():
         self.elevation = elevation
         self.backend = backend
         self.artifact_folder = artifact_folder
+        self._source_crs = None
         self.check_directory_existance(self.artifact_folder)
         self._ml_impute_config = {
             'train_ratio': 1,
@@ -86,6 +316,10 @@ class ClimateFiller():
             self.data = DataFrame()
             
         else:
+            if isinstance(data_path, pd.DataFrame):
+                self._source_crs = getattr(data_path, 'crs', None)
+                if self._source_crs is None and hasattr(data_path, 'attrs'):
+                    self._source_crs = data_path.attrs.get('crs')
             inferred_data_type = self._infer_data_type(data_path)
             self.data = self._create_data_wrapper(data_path, inferred_data_type, **kwargs)
             self._materialize_dataset_for_column_ops()
@@ -96,11 +330,67 @@ class ClimateFiller():
                 )
             self.data.rename_columns({datetime_column_name:'datetime'})
             datetime_column_name = 'datetime'
-            self.data.column_to_date(datetime_column_name, datetime_format)
-            self.data.reindex_dataframe(datetime_column_name)
+            self._normalize_datetime_column(datetime_column_name, datetime_format)
             self.datetime_column_name = datetime_column_name
         
         self.data_reanalysis = DataFrame()
+
+    def _get_underlying_dataframe(self):
+        if hasattr(self.data, 'get_dataframe'):
+            return self.data.get_dataframe()
+        return self.data
+
+    def _normalize_datetime_column(self, column_name, datetime_format='%Y-%m-%d %H:%M:%S'):
+        dataframe = self._get_underlying_dataframe().copy()
+        if column_name not in dataframe.columns:
+            raise KeyError(column_name)
+
+        raw_values = dataframe[column_name]
+        try:
+            values = pd.to_datetime(raw_values, format=datetime_format)
+        except (TypeError, ValueError):
+            try:
+                values = pd.to_datetime(raw_values, format='ISO8601')
+            except (TypeError, ValueError):
+                try:
+                    values = pd.to_datetime(raw_values, utc=True, errors='coerce')
+                except (TypeError, ValueError):
+                    values = pd.to_datetime(raw_values, errors='coerce')
+
+        dataframe[column_name] = values
+        dataframe.set_index(column_name, inplace=True)
+        dataframe.sort_index(inplace=True)
+
+        if hasattr(self.data, 'set_dataframe'):
+            self.data.set_dataframe(dataframe)
+        elif hasattr(self.data, 'dataframe'):
+            self.data.dataframe = dataframe
+        else:
+            self.data = dataframe
+
+        return dataframe
+
+    def __getattr__(self, name):
+        if name.startswith('__') and name.endswith('__'):
+            raise AttributeError(name)
+
+        dataframe = self._get_underlying_dataframe()
+        if hasattr(dataframe, name):
+            return getattr(dataframe, name)
+
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
+    def __getitem__(self, key):
+        return self._get_underlying_dataframe()[key]
+
+    def __setitem__(self, key, value):
+        dataframe = self._get_underlying_dataframe()
+        dataframe[key] = value
+        if hasattr(self.data, 'set_dataframe'):
+            self.data.set_dataframe(dataframe)
+
+    def __len__(self):
+        return len(self._get_underlying_dataframe())
 
     def _create_data_wrapper(self, data_path, inferred_data_type, **kwargs):
         """Create the third-party dataframe wrapper in a way that works across versions."""
@@ -299,6 +589,154 @@ class ClimateFiller():
             return self._normalize_frequency_label(median_delta)
         except Exception:
             return 'unknown'
+
+    def _align_source_series_to_target_frequency(self, source_series, column_to_fill_name, target_index=None):
+        if source_series is None:
+            return source_series
+
+        source_series = pd.Series(source_series).copy()
+        if source_series.empty:
+            return source_series
+
+        try:
+            source_series.index = pd.to_datetime(source_series.index)
+        except Exception:
+            return source_series
+
+        source_series = source_series[~source_series.index.duplicated(keep='first')].sort_index()
+
+        if target_index is None:
+            target_index = self.data.get_dataframe().index
+
+        try:
+            target_index = pd.DatetimeIndex(pd.to_datetime(target_index)).sort_values()
+        except Exception:
+            return source_series
+
+        if len(target_index) == 0:
+            return source_series
+
+        target_frequency_label = self._infer_frequency_label_from_index(target_index)
+        source_frequency_label = self._infer_frequency_label_from_index(source_series.index)
+
+        if target_frequency_label == 'daily' and source_frequency_label in {'hourly', 'unknown'}:
+            variable_context = self._resolve_imputation_variable_context(column_to_fill_name)
+            canonical = variable_context['canonical']
+            requested_aggregation = variable_context['aggregation']
+            radiation_like = canonical in {'rs'}
+            precipitation_like = canonical in {'p'}
+            if radiation_like:
+                daytime_series = source_series.between_time('09:00', '18:00')
+                resampled = daytime_series.groupby(daytime_series.index.floor('D')).mean()
+            elif precipitation_like:
+                resampled = source_series.resample('D').agg('sum')
+            else:
+                aggregation = requested_aggregation if requested_aggregation in {'max', 'min', 'mean'} else 'mean'
+                resampled = source_series.resample('D').agg(aggregation)
+            if len(resampled.index) == 0:
+                return source_series
+            return resampled.reindex(target_index)
+
+        if target_frequency_label == 'hourly' and source_frequency_label == 'daily':
+            variable_context = self._resolve_imputation_variable_context(column_to_fill_name)
+            canonical = variable_context['canonical']
+            requested_aggregation = variable_context['aggregation']
+            radiation_like = canonical in {'rs'}
+            precipitation_like = canonical in {'p'}
+            if radiation_like:
+                daytime_series = source_series.between_time('09:00', '18:00')
+                resampled = daytime_series.groupby(daytime_series.index.floor('D')).mean()
+            elif precipitation_like:
+                resampled = source_series.resample('H').agg('sum')
+            else:
+                aggregation = requested_aggregation if requested_aggregation in {'max', 'min', 'mean'} else 'mean'
+                resampled = source_series.resample('H').agg(aggregation)
+            if len(resampled.index) == 0:
+                return source_series
+            return resampled.reindex(target_index)
+
+        if not source_series.index.equals(target_index):
+            try:
+                return source_series.reindex(target_index)
+            except Exception:
+                return source_series
+
+        return source_series
+
+    def _resolve_imputation_variable_context(self, column_name):
+        normalized = str(column_name).strip().lower()
+        if normalized in {'ta', 't2m', 'temperature_2m'}:
+            return {'canonical': 'ta', 'aggregation': 'mean', 'source_var': 'ta'}
+
+        lookup = {
+            't2m_max': {'canonical': 'ta', 'aggregation': 'max', 'source_var': 'ta'},
+            't2m_min': {'canonical': 'ta', 'aggregation': 'min', 'source_var': 'ta'},
+            't2m_mean': {'canonical': 'ta', 'aggregation': 'mean', 'source_var': 'ta'},
+            'ta_max': {'canonical': 'ta', 'aggregation': 'max', 'source_var': 'ta'},
+            'ta_min': {'canonical': 'ta', 'aggregation': 'min', 'source_var': 'ta'},
+            'ta_mean': {'canonical': 'ta', 'aggregation': 'mean', 'source_var': 'ta'},
+            'temperature_2m_max': {'canonical': 'ta', 'aggregation': 'max', 'source_var': 'ta'},
+            'temperature_2m_min': {'canonical': 'ta', 'aggregation': 'min', 'source_var': 'ta'},
+            'temperature_2m_mean': {'canonical': 'ta', 'aggregation': 'mean', 'source_var': 'ta'},
+            'rh_max': {'canonical': 'rh', 'aggregation': 'max', 'source_var': 'rh'},
+            'rh_min': {'canonical': 'rh', 'aggregation': 'min', 'source_var': 'rh'},
+            'rh_mean': {'canonical': 'rh', 'aggregation': 'mean', 'source_var': 'rh'},
+            'relative_humidity_max': {'canonical': 'rh', 'aggregation': 'max', 'source_var': 'rh'},
+            'relative_humidity_min': {'canonical': 'rh', 'aggregation': 'min', 'source_var': 'rh'},
+            'relative_humidity_mean': {'canonical': 'rh', 'aggregation': 'mean', 'source_var': 'rh'},
+            'ws_max': {'canonical': 'ws', 'aggregation': 'max', 'source_var': 'ws'},
+            'ws_min': {'canonical': 'ws', 'aggregation': 'min', 'source_var': 'ws'},
+            'ws_mean': {'canonical': 'ws', 'aggregation': 'mean', 'source_var': 'ws'},
+            'wind_speed_max': {'canonical': 'ws', 'aggregation': 'max', 'source_var': 'ws'},
+            'wind_speed_min': {'canonical': 'ws', 'aggregation': 'min', 'source_var': 'ws'},
+            'wind_speed_mean': {'canonical': 'ws', 'aggregation': 'mean', 'source_var': 'ws'},
+            'rs_max': {'canonical': 'rs', 'aggregation': 'max', 'source_var': 'rs'},
+            'rs_min': {'canonical': 'rs', 'aggregation': 'min', 'source_var': 'rs'},
+            'rs_mean': {'canonical': 'rs', 'aggregation': 'mean', 'source_var': 'rs'},
+            'ssrd_max': {'canonical': 'rs', 'aggregation': 'max', 'source_var': 'rs'},
+            'ssrd_min': {'canonical': 'rs', 'aggregation': 'min', 'source_var': 'rs'},
+            'ssrd_mean': {'canonical': 'rs', 'aggregation': 'mean', 'source_var': 'rs'},
+            'p_max': {'canonical': 'p', 'aggregation': 'max', 'source_var': 'p'},
+            'p_min': {'canonical': 'p', 'aggregation': 'min', 'source_var': 'p'},
+            'p_mean': {'canonical': 'p', 'aggregation': 'mean', 'source_var': 'p'},
+            'tp_max': {'canonical': 'p', 'aggregation': 'max', 'source_var': 'p'},
+            'tp_min': {'canonical': 'p', 'aggregation': 'min', 'source_var': 'p'},
+            'tp_mean': {'canonical': 'p', 'aggregation': 'mean', 'source_var': 'p'},
+            'precipitation_max': {'canonical': 'p', 'aggregation': 'max', 'source_var': 'p'},
+            'precipitation_min': {'canonical': 'p', 'aggregation': 'min', 'source_var': 'p'},
+            'precipitation_mean': {'canonical': 'p', 'aggregation': 'mean', 'source_var': 'p'},
+            'total_precipitation_max': {'canonical': 'p', 'aggregation': 'max', 'source_var': 'p'},
+            'total_precipitation_min': {'canonical': 'p', 'aggregation': 'min', 'source_var': 'p'},
+            'total_precipitation_mean': {'canonical': 'p', 'aggregation': 'mean', 'source_var': 'p'},
+        }
+
+        if normalized in lookup:
+            return lookup[normalized]
+
+        base_name = normalized
+        for suffix in ('_max', '_min', '_mean'):
+            if base_name.endswith(suffix):
+                base_name = base_name[:-len(suffix)]
+                break
+
+        if base_name.startswith('ta_') or base_name.startswith('t2m_'):
+            return {'canonical': 'ta', 'aggregation': 'mean', 'source_var': 'ta'}
+        if base_name.startswith('rh_') or base_name.startswith('relative_humidity_'):
+            return {'canonical': 'rh', 'aggregation': 'mean', 'source_var': 'rh'}
+        if base_name.startswith('ws_') or base_name.startswith('wind_speed_'):
+            return {'canonical': 'ws', 'aggregation': 'mean', 'source_var': 'ws'}
+        if base_name.startswith('rs_') or base_name.startswith('ssrd_'):
+            return {'canonical': 'rs', 'aggregation': 'mean', 'source_var': 'rs'}
+        if base_name.startswith('p_') or base_name.startswith('tp_') or base_name.startswith('precipitation_') or base_name.startswith('total_precipitation_'):
+            return {'canonical': 'p', 'aggregation': 'mean', 'source_var': 'p'}
+
+        canonical_column_to_fill_name = {
+            't2m': 'ta',
+            'temperature_2m': 'ta',
+            'tp': 'p',
+            'precipitation': 'p',
+        }.get(normalized, normalized)
+        return {'canonical': canonical_column_to_fill_name, 'aggregation': 'mean', 'source_var': canonical_column_to_fill_name}
 
     def _build_era5_year_cache_path(self, variables, lon, lat, year, frequency=None):
         lon_key = self._format_coord_for_cache(lon)
@@ -536,6 +974,11 @@ class ClimateFiller():
         return model, list(X.columns), performance
 
     def _fill_from_source_series(self, column_to_fill_name, source_series, product, machine_learning_enabled=False):
+        source_series = self._align_source_series_to_target_frequency(
+            source_series,
+            column_to_fill_name,
+            self.data.get_dataframe().index,
+        )
         source_series = source_series[~source_series.index.duplicated(keep='first')].sort_index()
         missing_indexes = self.data.get_missing_data_indexes_in_column(column_to_fill_name)
 
@@ -578,7 +1021,23 @@ class ClimateFiller():
                 predicted_insitu_value = float(model.predict(features)[0])
                 filled_value = predicted_insitu_value
 
-            self.data.set_row(column_to_fill_name, p, filled_value)
+            try:
+                self.data.set_row(column_to_fill_name, p, filled_value)
+            except Exception:
+                pass
+
+            df = self.data.get_dataframe()
+            if column_to_fill_name not in df.columns:
+                df[column_to_fill_name] = np.nan
+            try:
+                df.loc[p_ts, column_to_fill_name] = filled_value
+            except Exception:
+                try:
+                    df.loc[p, column_to_fill_name] = filled_value
+                except Exception:
+                    df[column_to_fill_name] = df[column_to_fill_name].astype(float)
+                    df.loc[df.index == p_ts, column_to_fill_name] = filled_value
+            self.data.set_dataframe(df)
 
     def _ensure_impute_target_column(self, column_name):
         df = self.data.get_dataframe().copy()
@@ -842,7 +1301,104 @@ class ClimateFiller():
 
         return output_paths
 
-    def to_geo_dataframe(self, output_path, lon_column=None, lat_column=None, crs='EPSG:4326'):
+    def impute_batch(self, input_folder, output_folder, column_to_fill_name='ta', product='era5_land', machine_learning_enabled=False, train_ratio=1, model_name='xgboost', export_dataset=False, prefix=None, datetime_format='%Y-%m-%d %H:%M:%S', **kwargs):
+        """
+        Batch impute files from input_folder and save the imputed results to output_folder.
+
+        Args:
+            input_folder (str): Folder containing input files to impute.
+            output_folder (str): Destination folder for imputed files.
+            column_to_fill_name (str): Column to impute.
+            product (str): Source product name passed to impute().
+            machine_learning_enabled (bool): Whether to use the ML error model.
+            train_ratio (float): Train ratio for the ML error model.
+            model_name (str): Model name for the ML error model.
+            export_dataset (bool): Whether to export the training dataset artifact.
+            prefix (str or None): If provided, process only files that start with prefix.
+            datetime_format (str): Datetime parsing format used when initializing per-file instances.
+
+        Returns:
+            list: Output file paths generated.
+        """
+        if not os.path.isdir(input_folder):
+            raise ValueError(f"input_folder does not exist: {input_folder}")
+
+        self.check_directory_existance(output_folder)
+
+        supported_exts = {'.csv', '.xls', '.xlsx', '.json', '.parquet', '.geoparquet', '.pq', '.pqt'}
+        files = []
+        for name in os.listdir(input_folder):
+            path = os.path.join(input_folder, name)
+            if not os.path.isfile(path):
+                continue
+            if prefix is not None and not name.startswith(prefix):
+                continue
+            if os.path.splitext(name)[1].lower() not in supported_exts:
+                continue
+            files.append(name)
+
+        files = sorted(files)
+
+        if len(files) == 0:
+            LOGGER.warning("No input files found for impute_batch in %s with prefix=%s", input_folder, prefix)
+            return []
+
+        LOGGER.info(
+            "Starting batch impute: %d file(s), variable=%s, prefix=%s",
+            len(files),
+            column_to_fill_name,
+            prefix,
+        )
+
+        output_paths = []
+        file_iter = tqdm(files, total=len(files), desc="Batch impute", unit="file")
+        for filename in file_iter:
+            file_iter.set_postfix_str(filename)
+            input_path = os.path.join(input_folder, filename)
+            output_path = os.path.join(output_folder, filename)
+
+            input_df = self._load_dataframe_from_path(input_path)
+            datetime_column_candidates = [self.datetime_column_name, 'datetime', 'date', 'time', 'timestamp']
+            detected_datetime_column = None
+            for candidate in datetime_column_candidates:
+                if candidate in input_df.columns:
+                    detected_datetime_column = candidate
+                    break
+            if detected_datetime_column is None:
+                detected_datetime_column = next((col for col in input_df.columns if pd.api.types.is_datetime64_any_dtype(input_df[col])), None)
+            if detected_datetime_column is None:
+                raise ValueError(
+                    f"Could not infer a datetime column for batch imputation from file: {input_path}"
+                )
+
+            imputer = self.__class__(
+                data_path=input_df,
+                datetime_column_name=detected_datetime_column,
+                datetime_format=datetime_format,
+                backend=self.backend,
+                lat=self.lat,
+                lon=self.lon,
+                tz_offset=self.tz_offset,
+                elevation=self.elevation,
+                artifact_folder=self.artifact_folder,
+            )
+            imputer.impute(
+                column_to_fill_name=column_to_fill_name,
+                product=product,
+                machine_learning_enabled=machine_learning_enabled,
+                train_ratio=train_ratio,
+                model_name=model_name,
+                export_dataset=export_dataset,
+                **kwargs,
+            )
+            self._save_dataframe_to_path(imputer.data.get_dataframe().copy(), output_path)
+            output_paths.append(output_path)
+            LOGGER.info("Imputed file saved: %s", output_path)
+
+        LOGGER.info("Batch impute completed: %d output file(s)", len(output_paths))
+        return output_paths
+
+    def to_geo_dataframe(self, output_path, lon_column=None, lat_column=None, crs=None):
         """
         Export current in-situ data as a GeoDataFrame file.
 
@@ -852,7 +1408,7 @@ class ClimateFiller():
             output_path (str): Destination path, e.g. .geoparquet, .parquet, .geojson, .gpkg, .shp.
             lon_column (str or None): Longitude column name. If None, inferred.
             lat_column (str or None): Latitude column name. If None, inferred.
-            crs (str): Coordinate reference system. Defaults to EPSG:4326.
+            crs (str or None): Coordinate reference system. Defaults to the source CRS when available, otherwise EPSG:4326.
 
         Returns:
             geopandas.GeoDataFrame: Exported GeoDataFrame.
@@ -888,9 +1444,19 @@ class ClimateFiller():
         print(f"GeoDataFrame exported to {output_path}")
         return gdf
 
-    def _build_geodataframe_from_dataframe(self, df, lon_column=None, lat_column=None, crs='EPSG:4326'):
+    def _build_geodataframe_from_dataframe(self, df, lon_column=None, lat_column=None, crs=None):
         columns = list(df.columns)
         lower_to_original = {str(col).lower(): col for col in columns}
+
+        if crs is None:
+            source_crs = getattr(df, 'crs', None)
+            if source_crs is None and hasattr(df, 'attrs'):
+                source_crs = df.attrs.get('crs')
+            if source_crs is None and hasattr(df, 'geometry'):
+                source_crs = getattr(df.geometry, 'crs', None)
+            if source_crs is None:
+                source_crs = getattr(self, '_source_crs', None)
+            crs = source_crs or 'EPSG:4326'
 
         # If class-level lon/lat are provided as column names, prioritize them.
         if lon_column is None and isinstance(self.lon, str):
@@ -1117,12 +1683,8 @@ class ClimateFiller():
         self._ml_impute_config['model_kwargs'] = kwargs
 
         requested_column_to_fill_name = column_to_fill_name
-        canonical_column_to_fill_name = {
-            't2m': 'ta',
-            'temperature_2m': 'ta',
-            'tp': 'p',
-            'precipitation': 'p',
-        }.get(requested_column_to_fill_name, requested_column_to_fill_name)
+        variable_context = self._resolve_imputation_variable_context(requested_column_to_fill_name)
+        canonical_column_to_fill_name = variable_context['canonical']
         target_column_to_fill_name = self._ensure_impute_target_column(requested_column_to_fill_name)
         target_frequency = self._infer_frequency_label_from_index(self.data.get_dataframe().index)
 
@@ -2792,26 +3354,87 @@ class ClimateFiller():
         else:
             pass
     
-    def export(self, path_link='data/climate_ts.csv', data_type='csv', **kwargs):
+    def export(self, path_link='data/climate_ts.csv', data_type=None, crs=None, **kwargs):
         """
         Exports the processed data to a specified file or location.
 
         Args:
             self (object): The instance of the class.
             path_link (str): The path or link to export the processed data. Defaults to 'data/climate_ts.csv'.
-            data_type (str): The type of the exported data. Defaults to 'csv'.
+            data_type (str or None): Optional explicit export type. If omitted, the type is inferred from the file extension.
+            crs (str or None): Optional coordinate reference system. If None, geospatial exports preserve the source CRS when available.
 
         Returns:
-            None
+            None or geopandas.GeoDataFrame: For geospatial exports, a GeoDataFrame is returned.
 
         Notes:
             - The export method is used to save the processed data to a file or location.
             - The path_link parameter specifies the destination path or link for the exported data.
-            - The data_type parameter indicates the format or type of the exported data, with 'csv' as the default value.
+            - If data_type is not provided, the format is inferred from the destination file extension.
+            - Geospatial exports preserve the source CRS by default when crs is None.
             - The processed data will be saved according to the specified file format and location.
             - The exported data can be used for further analysis, sharing, or storage.
         """
-        self.data.export(path_link, data_type, kwargs)
+        if data_type is None:
+            path_lower = str(path_link).lower()
+            if path_lower.endswith('.parquet') or path_lower.endswith('.geoparquet') or path_lower.endswith('.pq') or path_lower.endswith('.pqt'):
+                data_type = 'parquet'
+            elif path_lower.endswith('.csv'):
+                data_type = 'csv'
+            elif path_lower.endswith('.json') or path_lower.endswith('.geojson'):
+                data_type = 'json'
+            elif path_lower.endswith('.xlsx') or path_lower.endswith('.xls'):
+                data_type = 'xls'
+            else:
+                data_type = 'csv'
+
+        path_lower = str(path_link).lower()
+        is_geospatial_output = data_type in {'parquet', 'geoparquet', 'geojson', 'json', 'gpkg', 'shp'} or path_lower.endswith(('.parquet', '.geoparquet', '.pq', '.pqt', '.geojson', '.gpkg', '.shp'))
+
+        export_kwargs = dict(kwargs)
+        try:
+            setattr(self.data, 'last_export_path', path_link)
+            setattr(self.data, 'last_export_data_type', data_type)
+            setattr(self.data, 'last_export_kwargs', export_kwargs)
+        except Exception:
+            pass
+
+        if is_geospatial_output:
+            output_dir = os.path.dirname(path_link)
+            if output_dir:
+                self.check_directory_existance(output_dir)
+
+            df = self.data.get_dataframe().copy()
+            lon_column = kwargs.pop('lon_column', None)
+            lat_column = kwargs.pop('lat_column', None)
+            gdf = self._build_geodataframe_from_dataframe(
+                df,
+                lon_column=lon_column,
+                lat_column=lat_column,
+                crs=crs,
+            )
+
+            extension = os.path.splitext(path_link)[1].lower()
+            if extension in ('.parquet', '.geoparquet', '.pq', '.pqt'):
+                gdf.to_parquet(path_link, index=kwargs.pop('index', False))
+            elif extension in ('.geojson', '.json'):
+                gdf.to_file(path_link, driver='GeoJSON')
+            elif extension == '.gpkg':
+                gdf.to_file(path_link, driver='GPKG')
+            elif extension == '.shp':
+                gdf.to_file(path_link, driver='ESRI Shapefile')
+            else:
+                raise ValueError(
+                    f"Unsupported geospatial output format '{extension}'. "
+                    "Supported formats: .geoparquet, .parquet, .geojson, .json, .gpkg, .shp"
+                )
+
+            print(f"Exported geospatial file: {os.path.abspath(path_link)}")
+            return gdf
+
+        result = self.data.export(path_link, data_type, **kwargs)
+        print(f"Exported file: {os.path.abspath(path_link)}")
+        return result
         
     def download_era5_land_data_by_years(self, variables, start_date, end_date):
         self.check_directory_existance('data')
