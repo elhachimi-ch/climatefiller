@@ -114,6 +114,7 @@ class ClimateFiller():
                 '.xlsx': 'xlsx',
                 '.json': 'json',
                 '.parquet': 'parquet',
+                '.geoparquet': 'parquet',
                 '.pq': 'parquet',
                 '.pqt': 'parquet'
             }
@@ -209,14 +210,83 @@ class ClimateFiller():
         formatted = f"{float(value):.5f}"
         return formatted.replace('-', 'm').replace('.', 'p')
 
-    def _build_source_cache_path(self, product, variable, lon, lat, start_datetime, end_datetime):
+    @staticmethod
+    def _sanitize_cache_token(value):
+        return re.sub(r'[^A-Za-z0-9]+', '-', str(value)).strip('-').lower()
+
+    @staticmethod
+    def _normalize_frequency_label(freq):
+        if freq is None:
+            return 'unknown'
+
+        freq_token = str(freq).strip().lower()
+        if freq_token in {'h', '1h', 'hour', 'hourly'}:
+            return 'hourly'
+        if freq_token in {'d', '1d', 'day', 'daily'}:
+            return 'daily'
+        if freq_token in {'m', 'min', 'minute', 'minutely'}:
+            return 'minutely'
+
+        return ClimateFiller._sanitize_cache_token(freq_token)
+
+    def _infer_frequency_label_from_index(self, dt_index):
+        if dt_index is None or len(dt_index) < 2:
+            return 'unknown'
+
+        try:
+            inferred = pd.infer_freq(pd.DatetimeIndex(dt_index))
+            if inferred is not None:
+                return self._normalize_frequency_label(inferred)
+        except Exception:
+            pass
+
+        try:
+            sorted_index = pd.DatetimeIndex(dt_index).sort_values()
+            deltas = sorted_index.to_series().diff().dropna()
+            if len(deltas) == 0:
+                return 'unknown'
+            median_delta = deltas.median()
+            if pd.isna(median_delta):
+                return 'unknown'
+
+            seconds = median_delta.total_seconds()
+            if seconds <= 5400:
+                return 'hourly'
+            if seconds <= 129600:
+                return 'daily'
+            return self._normalize_frequency_label(median_delta)
+        except Exception:
+            return 'unknown'
+
+    def _build_era5_year_cache_path(self, variables, lon, lat, year, frequency=None):
+        lon_key = self._format_coord_for_cache(lon)
+        lat_key = self._format_coord_for_cache(lat)
+        freq_label = self._normalize_frequency_label(frequency)
+        vars_key = '_'.join([str(s) for s in variables])
+        filename = f"era5_land_freq_{freq_label}_{vars_key}_{lon_key}_{lat_key}_{year}.csv"
+        return os.path.join('data', 'cache', filename)
+
+    def _resolve_era5_year_cache_path(self, variables, lon, lat, year, frequency=None):
+        freq_path = self._build_era5_year_cache_path(variables, lon, lat, year, frequency)
+        if os.path.exists(freq_path):
+            return freq_path
+
+        legacy_path = os.path.join(
+            'data',
+            'cache',
+            'era5_land_' + '_'.join([str(s) for s in variables] + [str(lon), str(lat), str(year)]) + '.csv',
+        )
+        return legacy_path
+
+    def _build_source_cache_path(self, product, variable, lon, lat, start_datetime, end_datetime, frequency=None):
         start_ts = pd.to_datetime(start_datetime).strftime('%Y%m%d%H%M%S')
         end_ts = pd.to_datetime(end_datetime).strftime('%Y%m%d%H%M%S')
         lon_key = self._format_coord_for_cache(lon)
         lat_key = self._format_coord_for_cache(lat)
+        freq_label = self._normalize_frequency_label(frequency)
         filename = (
             f"impute_source_backend_{self.backend}_product_{product}_var_{variable}_"
-            f"lon_{lon_key}_lat_{lat_key}_start_{start_ts}_end_{end_ts}.csv"
+            f"freq_{freq_label}_lon_{lon_key}_lat_{lat_key}_start_{start_ts}_end_{end_ts}.csv"
         )
         return os.path.join('data', 'cache', filename)
 
@@ -467,6 +537,31 @@ class ClimateFiller():
                 filled_value = predicted_insitu_value
 
             self.data.set_row(column_to_fill_name, p, filled_value)
+
+    def _ensure_impute_target_column(self, column_name):
+        df = self.data.get_dataframe().copy()
+        if column_name not in df.columns:
+            df[column_name] = np.nan
+            self.data.set_dataframe(df)
+            LOGGER.info("Created missing target column for imputation: %s", column_name)
+        return column_name
+
+    @staticmethod
+    def _extract_remote_series(dataframe, preferred_columns=None):
+        preferred_columns = preferred_columns or []
+        for col in preferred_columns:
+            if col in dataframe.columns:
+                return dataframe[col]
+
+        ignored = {'datetime', 'valid_time'}
+        for col in dataframe.columns:
+            if str(col).lower() in ignored:
+                continue
+            return dataframe[col]
+
+        raise ValueError(
+            f"Unable to find a remote value column. Available columns: {list(dataframe.columns)}"
+        )
         
     def show(self, number_of_row=None):
         """
@@ -657,7 +752,7 @@ class ClimateFiller():
 
         self.check_directory_existance(output_folder)
 
-        supported_exts = {'.csv', '.xls', '.xlsx', '.json', '.parquet', '.pq', '.pqt'}
+        supported_exts = {'.csv', '.xls', '.xlsx', '.json', '.parquet', '.geoparquet', '.pq', '.pqt'}
         files = []
         for name in os.listdir(input_folder):
             path = os.path.join(input_folder, name)
@@ -712,7 +807,7 @@ class ClimateFiller():
         File type is inferred from output_path extension.
 
         Args:
-            output_path (str): Destination path, e.g. .parquet, .geojson, .gpkg, .shp.
+            output_path (str): Destination path, e.g. .geoparquet, .parquet, .geojson, .gpkg, .shp.
             lon_column (str or None): Longitude column name. If None, inferred.
             lat_column (str or None): Latitude column name. If None, inferred.
             crs (str): Coordinate reference system. Defaults to EPSG:4326.
@@ -733,7 +828,7 @@ class ClimateFiller():
             self.check_directory_existance(output_dir)
 
         extension = os.path.splitext(output_path)[1].lower()
-        if extension in ('.parquet', '.pq', '.pqt'):
+        if extension in ('.parquet', '.geoparquet', '.pq', '.pqt'):
             gdf.to_parquet(output_path, index=False)
         elif extension in ('.geojson', '.json'):
             gdf.to_file(output_path, driver='GeoJSON')
@@ -744,7 +839,7 @@ class ClimateFiller():
         else:
             raise ValueError(
                 f"Unsupported geospatial output format '{extension}'. "
-                "Supported formats: .parquet, .geojson, .json, .gpkg, .shp"
+                "Supported formats: .geoparquet, .parquet, .geojson, .json, .gpkg, .shp"
             )
 
         LOGGER.info("GeoDataFrame exported: %s (%d rows)", output_path, len(gdf))
@@ -810,7 +905,7 @@ class ClimateFiller():
             lat_column (str or None): Optional explicit latitude column name.
             crs (str): Coordinate reference system. Defaults to EPSG:4326.
             file_type (str): Export format for all output files.
-                Supported: parquet, geojson, json, gpkg, shp. Defaults to parquet.
+                Supported: geoparquet, parquet, geojson, json, gpkg, shp. Defaults to parquet.
 
         Returns:
             list: Output file paths generated.
@@ -820,8 +915,10 @@ class ClimateFiller():
 
         self.check_directory_existance(output_folder)
 
-        supported_exts = {'.csv', '.xls', '.xlsx', '.json', '.parquet', '.pq', '.pqt', '.geojson', '.gpkg', '.shp'}
+        supported_exts = {'.csv', '.xls', '.xlsx', '.json', '.parquet', '.geoparquet', '.pq', '.pqt', '.geojson', '.gpkg', '.shp'}
         file_type_to_ext = {
+            'geoparquet': '.geoparquet',
+            '.geoparquet': '.geoparquet',
             'parquet': '.parquet',
             '.parquet': '.parquet',
             'pq': '.parquet',
@@ -841,7 +938,7 @@ class ClimateFiller():
         if output_ext is None:
             raise ValueError(
                 f"Unsupported file_type '{file_type}'. "
-                "Supported: parquet, geojson, json, gpkg, shp"
+                "Supported: geoparquet, parquet, geojson, json, gpkg, shp"
             )
 
         files = []
@@ -883,7 +980,7 @@ class ClimateFiller():
                 crs=crs,
             )
 
-            if output_ext in ('.parquet', '.pq', '.pqt'):
+            if output_ext in ('.parquet', '.geoparquet', '.pq', '.pqt'):
                 gdf.to_parquet(output_path, index=False)
             elif output_ext in ('.geojson', '.json'):
                 gdf.to_file(output_path, driver='GeoJSON')
@@ -977,19 +1074,22 @@ class ClimateFiller():
         lat = kwargs.pop('lat', self.lat)
         self._ml_impute_config['model_kwargs'] = kwargs
 
+        requested_column_to_fill_name = column_to_fill_name
         canonical_column_to_fill_name = {
             't2m': 'ta',
             'temperature_2m': 'ta',
             'tp': 'p',
             'precipitation': 'p',
-        }.get(column_to_fill_name, column_to_fill_name)
+        }.get(requested_column_to_fill_name, requested_column_to_fill_name)
+        target_column_to_fill_name = self._ensure_impute_target_column(requested_column_to_fill_name)
+        target_frequency = self._infer_frequency_label_from_index(self.data.get_dataframe().index)
 
-        missing_count = self.missing_data_checking(column_to_fill_name, verbose=False)
+        missing_count = self.missing_data_checking(target_column_to_fill_name, verbose=False)
         total_rows = self.data.get_shape()[0]
         missing_percent = round((missing_count / total_rows) * 100, 2) if total_rows > 0 else 0
         print(
             "Missing data statistic for {}: {} missing value(s) out of {} rows ({}%).".format(
-                column_to_fill_name,
+                target_column_to_fill_name,
                 missing_count,
                 total_rows,
                 missing_percent,
@@ -998,25 +1098,28 @@ class ClimateFiller():
 
         if self.backend == 'gee':
             if missing_count == 0:
-                print('No missing data found in ' + column_to_fill_name)
+                print('No missing data found in ' + target_column_to_fill_name)
                 return
             
             if product=='era5_land':
-                if canonical_column_to_fill_name == 'ta':
-                    era5_land_variables = ['temperature_2m']
-                elif canonical_column_to_fill_name == 'rh':
-                    era5_land_variables = ['temperature_2m', 'dewpoint_temperature_2m']
-                elif canonical_column_to_fill_name == 'rs':
-                    era5_land_variables = ['surface_solar_radiation_downwards']
-                elif canonical_column_to_fill_name == 'ws':
-                    era5_land_variables = ['u_component_of_wind_10m', 'v_component_of_wind_10m']
-                elif canonical_column_to_fill_name == 'p':
-                    era5_land_variables = ['total_precipitation']
-                else:
-                    raise ValueError(f"Invalid column_to_fill_name: {column_to_fill_name}")
+                era5_land_variable_map = {
+                    'ta': ['temperature_2m'],
+                    'rh': ['temperature_2m', 'dewpoint_temperature_2m'],
+                    'rs': ['surface_solar_radiation_downwards'],
+                    'ws': ['u_component_of_wind_10m', 'v_component_of_wind_10m'],
+                    'p': ['total_precipitation'],
+                }
+                era5_land_variables = era5_land_variable_map.get(canonical_column_to_fill_name)
+                raw_remote_passthrough = era5_land_variables is None
+                if raw_remote_passthrough:
+                    era5_land_variables = [canonical_column_to_fill_name]
+                    LOGGER.info(
+                        "Using raw remote pass-through for variable '%s' in ERA5-Land GEE branch.",
+                        canonical_column_to_fill_name,
+                    )
                     
                 indexes = []
-                indexes_source = self.data.get_dataframe().index if machine_learning_enabled else self.data.get_missing_data_indexes_in_column(column_to_fill_name)
+                indexes_source = self.data.get_dataframe().index if machine_learning_enabled else self.data.get_missing_data_indexes_in_column(target_column_to_fill_name)
                 for p in tqdm(indexes_source, desc="Collect timestamps", unit="ts"):
                     if isinstance(p, str) is True:
                         indexes.append(datetime.datetime.strptime(p, '%Y-%m-%d %H:%M:%S'))
@@ -1038,13 +1141,25 @@ class ClimateFiller():
                     lat,
                     range_start,
                     range_end,
+                    frequency=target_frequency,
                 )
-                if os.path.exists(source_cache_path):
+                legacy_source_cache_path = self._build_source_cache_path(
+                    product,
+                    canonical_column_to_fill_name,
+                    lon,
+                    lat,
+                    range_start,
+                    range_end,
+                    frequency=None,
+                )
+                source_cache_candidate = source_cache_path if os.path.exists(source_cache_path) else legacy_source_cache_path
+                if os.path.exists(source_cache_candidate):
+                    source_cache_path = source_cache_candidate
                     print(f"Reusing cached source data from: {source_cache_path}")
                     LOGGER.info("Source cache hit: %s", source_cache_path)
                     source_series = self._load_source_series_cache(source_cache_path)
                     self._fill_from_source_series(
-                        column_to_fill_name,
+                        target_column_to_fill_name,
                         source_series,
                         product,
                         machine_learning_enabled,
@@ -1061,7 +1176,8 @@ class ClimateFiller():
                 if canonical_column_to_fill_name == 'ta':
                     
                     for year in tqdm(years, desc="Load ERA5 yearly cache", unit="year"):
-                        data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
+                        cache_path = self._resolve_era5_year_cache_path(era5_land_variables, lon, lat, year, frequency=target_frequency)
+                        data_year = DataFrame(cache_path)
                         data.append_dataframe(data_year.dataframe)
                         
                     data.rename_columns({'first': 't2m'})
@@ -1074,7 +1190,7 @@ class ClimateFiller():
                     data.drop_duplicated_indexes()
 
                     self._fill_from_source_series(
-                        column_to_fill_name,
+                        target_column_to_fill_name,
                         data.get_dataframe()['t2m'],
                         product,
                         machine_learning_enabled,
@@ -1086,7 +1202,8 @@ class ClimateFiller():
                 elif canonical_column_to_fill_name == 'rh':
                     
                     for year in tqdm(years, desc="Load ERA5 yearly cache", unit="year"):
-                        data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
+                        cache_path = self._resolve_era5_year_cache_path(era5_land_variables, lon, lat, year, frequency=target_frequency)
+                        data_year = DataFrame(cache_path)
                         data.append_dataframe(data_year.dataframe)
                     data.reset_index()
                     data.column_to_date("datetime")
@@ -1099,7 +1216,7 @@ class ClimateFiller():
                     data.add_column_based_on_function('era5_hr', lambda row: Lib.relative_humidity_magnus(row['t2m'], row['d2m']))
                     data.missing_data('era5_hr')
                     self._fill_from_source_series(
-                        column_to_fill_name,
+                        target_column_to_fill_name,
                         data.get_dataframe()['era5_hr'],
                         product,
                         machine_learning_enabled,
@@ -1111,7 +1228,8 @@ class ClimateFiller():
                 elif canonical_column_to_fill_name == 'ws':
                     
                     for year in tqdm(years, desc="Load ERA5 yearly cache", unit="year"):
-                        data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
+                        cache_path = self._resolve_era5_year_cache_path(era5_land_variables, lon, lat, year, frequency=target_frequency)
+                        data_year = DataFrame(cache_path)
                         data.append_dataframe(data_year.dataframe)
                     data.reset_index()
                     data.column_to_date("datetime")
@@ -1122,7 +1240,7 @@ class ClimateFiller():
                     data.missing_data('u10')
                     data.missing_data('era5_ws')
                     self._fill_from_source_series(
-                        column_to_fill_name,
+                        target_column_to_fill_name,
                         data.get_dataframe()['era5_ws'],
                         product,
                         machine_learning_enabled,
@@ -1134,7 +1252,8 @@ class ClimateFiller():
                 elif canonical_column_to_fill_name == 'rs':
                     
                     for year in tqdm(years, desc="Load ERA5 yearly cache", unit="year"):
-                        data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
+                        cache_path = self._resolve_era5_year_cache_path(era5_land_variables, lon, lat, year, frequency=target_frequency)
+                        data_year = DataFrame(cache_path)
                         data.append_dataframe(data_year.dataframe)
                         
                     data.rename_columns({'first': 'ssrd'})
@@ -1160,7 +1279,7 @@ class ClimateFiller():
                     
                     data.transform_column('ssrd', lambda o : o if abs(o) < 1500 else 0 )    
                     self._fill_from_source_series(
-                        column_to_fill_name,
+                        target_column_to_fill_name,
                         data.get_dataframe()['ssrd'],
                         product,
                         machine_learning_enabled,
@@ -1171,7 +1290,8 @@ class ClimateFiller():
                 
                 elif canonical_column_to_fill_name == 'p':
                     for year in tqdm(years, desc="Load ERA5 yearly cache", unit="year"):
-                        data_year = DataFrame('data/cache/era5_land_' + '_'.join([str(s) for s in era5_land_variables] + [str(lon), str(lat), str(year)]) + '.csv')
+                        cache_path = self._resolve_era5_year_cache_path(era5_land_variables, lon, lat, year, frequency=target_frequency)
+                        data_year = DataFrame(cache_path)
                         data.append_dataframe(data_year.dataframe)
                         
                     data.rename_columns({'first': 'tp'})    
@@ -1181,7 +1301,7 @@ class ClimateFiller():
                     data.reindex_dataframe("datetime")
                     data.set_dataframe(data.get_dataframe().sort_index())
                     data.missing_data('tp')
-                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
+                    nan_indices = self.data.get_nan_indexes_of_column(target_column_to_fill_name)
                     data.drop_duplicated_indexes()
                     
                     l = [] 
@@ -1202,7 +1322,7 @@ class ClimateFiller():
                     data.rename_columns({'p': 'tp'})
                     
                     self._fill_from_source_series(
-                        column_to_fill_name,
+                        target_column_to_fill_name,
                         data.get_dataframe()['tp'],
                         product,
                         machine_learning_enabled,
@@ -1210,6 +1330,36 @@ class ClimateFiller():
                     self._save_source_series_cache(data.get_dataframe()['tp'], source_cache_path)
                 
                     print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
+
+                else:
+                    for year in tqdm(years, desc="Load ERA5 yearly cache", unit="year"):
+                        cache_path = self._resolve_era5_year_cache_path(era5_land_variables, lon, lat, year, frequency=target_frequency)
+                        data_year = DataFrame(cache_path)
+                        data.append_dataframe(data_year.dataframe)
+
+                    data.reset_index()
+                    if 'datetime' in data.get_dataframe().columns:
+                        data.column_to_date('datetime')
+                        data.reindex_dataframe('datetime')
+                    data.set_dataframe(data.get_dataframe().sort_index())
+
+                    remote_series = self._extract_remote_series(
+                        data.get_dataframe(),
+                        preferred_columns=[canonical_column_to_fill_name, 'first'],
+                    )
+                    self._fill_from_source_series(
+                        target_column_to_fill_name,
+                        remote_series,
+                        product,
+                        machine_learning_enabled,
+                    )
+                    self._save_source_series_cache(remote_series, source_cache_path)
+
+                    print(
+                        'Imputation of missing data for '
+                        + column_to_fill_name
+                        + ' from ERA5-Land raw remote variable was done.'
+                    )
                 
             elif product == 'merra2':
                 merra2_variables = {
@@ -1221,10 +1371,7 @@ class ClimateFiller():
                     'pr': 'PRECTOTCORR',
                     'wd': 'WD2M'
                 }
-
-                if canonical_column_to_fill_name not in merra2_variables:
-                    print(f'Invalid column_to_fill_name: {column_to_fill_name}')
-                    return
+                merra2_parameter = merra2_variables.get(canonical_column_to_fill_name, canonical_column_to_fill_name)
 
                 start = self.data.get_dataframe().index[0]
                 end = self.data.get_dataframe().index[-1]
@@ -1235,13 +1382,25 @@ class ClimateFiller():
                     lat,
                     start,
                     end,
+                    frequency=target_frequency,
                 )
-                if os.path.exists(source_cache_path):
+                legacy_source_cache_path = self._build_source_cache_path(
+                    product,
+                    canonical_column_to_fill_name,
+                    lon,
+                    lat,
+                    start,
+                    end,
+                    frequency=None,
+                )
+                source_cache_candidate = source_cache_path if os.path.exists(source_cache_path) else legacy_source_cache_path
+                if os.path.exists(source_cache_candidate):
+                    source_cache_path = source_cache_candidate
                     print(f"Reusing cached source data from: {source_cache_path}")
                     LOGGER.info("Source cache hit: %s", source_cache_path)
                     source_series = self._load_source_series_cache(source_cache_path)
                     self._fill_from_source_series(
-                        column_to_fill_name,
+                        target_column_to_fill_name,
                         source_series,
                         product,
                         machine_learning_enabled,
@@ -1263,7 +1422,7 @@ class ClimateFiller():
                     'latitude': lat,
                     'longitude': lon,
                     'community': community,
-                    'parameters': merra2_variables[canonical_column_to_fill_name],
+                    'parameters': merra2_parameter,
                     'format': format,
                     'user': 'ysouidi1',
                     'header': 'true',
@@ -1277,16 +1436,22 @@ class ClimateFiller():
                     return None
 
                 data_merra = response.json()
-                result = data_merra['properties']['parameter'][merra2_variables[canonical_column_to_fill_name]]
-                df = pd.DataFrame(result.items(), columns=['datetime', column_to_fill_name])
+                result = data_merra['properties']['parameter'].get(merra2_parameter)
+                if result is None:
+                    available = list(data_merra.get('properties', {}).get('parameter', {}).keys())
+                    raise ValueError(
+                        f"Remote variable '{canonical_column_to_fill_name}' not available in MERRA2 response. Available: {available}"
+                    )
+
+                df = pd.DataFrame(result.items(), columns=['datetime', target_column_to_fill_name])
                 df['datetime'] = pd.to_datetime(df['datetime'], format='%Y%m%d%H')
 
-                if len(self.data.get_missing_data_indexes_in_column(column_to_fill_name)) == 0:
+                if len(self.data.get_missing_data_indexes_in_column(target_column_to_fill_name)) == 0:
                     return
 
-                source_series = df.set_index('datetime')[column_to_fill_name]
+                source_series = df.set_index('datetime')[target_column_to_fill_name]
                 self._fill_from_source_series(
-                    column_to_fill_name,
+                    target_column_to_fill_name,
                     source_series,
                     product,
                     machine_learning_enabled,
@@ -1304,22 +1469,25 @@ class ClimateFiller():
             pass
         else:
             if missing_count == 0:
-                print('No missing data found in ' + column_to_fill_name)
+                print('No missing data found in ' + target_column_to_fill_name)
                 return
             
             if product=='era5_land':
-                if canonical_column_to_fill_name == 'ta':
-                    era5_land_variables = ['2m_temperature']
-                elif canonical_column_to_fill_name == 'rh':
-                    era5_land_variables = ['2m_temperature', '2m_dewpoint_temperature']
-                elif canonical_column_to_fill_name == 'rs':
-                    era5_land_variables = ['surface_solar_radiation_downwards']
-                elif canonical_column_to_fill_name == 'ws':
-                    era5_land_variables = ['10m_u_component_of_wind', '10m_v_component_of_wind']
-                elif canonical_column_to_fill_name == 'p':
-                    era5_land_variables = ['total_precipitation']
-                else:
-                    raise ValueError(f"Invalid column_to_fill_name: {column_to_fill_name}")
+                era5_land_variable_map = {
+                    'ta': ['2m_temperature'],
+                    'rh': ['2m_temperature', '2m_dewpoint_temperature'],
+                    'rs': ['surface_solar_radiation_downwards'],
+                    'ws': ['10m_u_component_of_wind', '10m_v_component_of_wind'],
+                    'p': ['total_precipitation'],
+                }
+                era5_land_variables = era5_land_variable_map.get(canonical_column_to_fill_name)
+                raw_remote_passthrough = era5_land_variables is None
+                if raw_remote_passthrough:
+                    era5_land_variables = [canonical_column_to_fill_name]
+                    LOGGER.info(
+                        "Using raw remote pass-through for variable '%s' in ERA5-Land CDS branch.",
+                        canonical_column_to_fill_name,
+                    )
                     
                     
                 from data_science_toolkit.gis import GIS
@@ -1330,7 +1498,7 @@ class ClimateFiller():
                     self.data.reindex_dataframe(self.datetime_column_name)"""
 
                 indexes = []
-                indexes_source = self.data.get_dataframe().index if machine_learning_enabled else self.data.get_missing_data_indexes_in_column(column_to_fill_name)
+                indexes_source = self.data.get_dataframe().index if machine_learning_enabled else self.data.get_missing_data_indexes_in_column(target_column_to_fill_name)
                 for p in tqdm(indexes_source, desc="Collect timestamps", unit="ts"):
                     if isinstance(p, str) is True:
                         indexes.append(datetime.datetime.strptime(p, '%Y-%m-%d %H:%M:%S'))
@@ -1351,13 +1519,25 @@ class ClimateFiller():
                     lat,
                     range_start,
                     range_end,
+                    frequency=target_frequency,
                 )
-                if os.path.exists(source_cache_path):
+                legacy_source_cache_path = self._build_source_cache_path(
+                    product,
+                    canonical_column_to_fill_name,
+                    lon,
+                    lat,
+                    range_start,
+                    range_end,
+                    frequency=None,
+                )
+                source_cache_candidate = source_cache_path if os.path.exists(source_cache_path) else legacy_source_cache_path
+                if os.path.exists(source_cache_candidate):
+                    source_cache_path = source_cache_candidate
                     print(f"Reusing cached source data from: {source_cache_path}")
                     LOGGER.info("Source cache hit: %s", source_cache_path)
                     source_series = self._load_source_series_cache(source_cache_path)
                     self._fill_from_source_series(
-                        column_to_fill_name,
+                        target_column_to_fill_name,
                         source_series,
                         product,
                         machine_learning_enabled,
@@ -1423,7 +1603,7 @@ class ClimateFiller():
                     data.transform_column('t2m', lambda o: o - 273.15)
                     data.drop_duplicated_indexes()
                     self._fill_from_source_series(
-                        column_to_fill_name,
+                        target_column_to_fill_name,
                         data.get_dataframe()['t2m'],
                         product,
                         machine_learning_enabled,
@@ -1461,7 +1641,7 @@ class ClimateFiller():
                     #data.add_transformed_columns('era5_hr', '100*exp(-((243.12*17.62*t2m)-(d2m*17.62*t2m)-d2m*17.62*(243.12+t2m))/((243.12+t2m)*(243.12+d2m)))')
                     data.missing_data('era5_hr')
                     self._fill_from_source_series(
-                        column_to_fill_name,
+                        target_column_to_fill_name,
                         data.get_dataframe()['era5_hr'],
                         product,
                         machine_learning_enabled,
@@ -1494,7 +1674,7 @@ class ClimateFiller():
                     data.missing_data('u10')
                     data.missing_data('era5_ws')
                     self._fill_from_source_series(
-                        column_to_fill_name,
+                        target_column_to_fill_name,
                         data.get_dataframe()['era5_ws'],
                         product,
                         machine_learning_enabled,
@@ -1530,7 +1710,7 @@ class ClimateFiller():
                     
                     data.transform_column('ssrd', lambda o : o if abs(o) < 1500 else 0 )    
                     self._fill_from_source_series(
-                        column_to_fill_name,
+                        target_column_to_fill_name,
                         data.get_dataframe()['ssrd'],
                         product,
                         machine_learning_enabled,
@@ -1551,7 +1731,7 @@ class ClimateFiller():
                     data.reindex_dataframe("valid_time")
                     data.set_dataframe(data.get_dataframe().sort_index())
                     data.missing_data('tp')
-                    nan_indices = self.data.get_nan_indexes_of_column(column_to_fill_name)
+                    nan_indices = self.data.get_nan_indexes_of_column(target_column_to_fill_name)
                     data.drop_duplicated_indexes()
                     
                     l = []
@@ -1572,7 +1752,7 @@ class ClimateFiller():
                     data.rename_columns({'p': 'tp'})
                     
                     self._fill_from_source_series(
-                        column_to_fill_name,
+                        target_column_to_fill_name,
                         data.get_dataframe()['tp'],
                         product,
                         machine_learning_enabled,
@@ -1580,6 +1760,36 @@ class ClimateFiller():
                     self._save_source_series_cache(data.get_dataframe()['tp'], source_cache_path)
                 
                     print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
+
+                else:
+                    for year in years:
+                        for month in missing_data_dates[year]['month']:
+                            data_month_path = 'data\era5land_' + canonical_column_to_fill_name + '_' + str(lon) + '_' + str(lat) + '_' + str(year) + '_' + month + '.grib'
+                            data.append_dataframe(gis.get_era5_land_grib_as_dataframe(data_month_path, "ta"),)
+
+                    data.reset_index()
+                    data.column_to_date('valid_time')
+                    data.reindex_dataframe("valid_time")
+                    data.set_dataframe(data.get_dataframe().sort_index())
+                    data.drop_duplicated_indexes()
+
+                    remote_series = self._extract_remote_series(
+                        data.get_dataframe(),
+                        preferred_columns=[canonical_column_to_fill_name],
+                    )
+                    self._fill_from_source_series(
+                        target_column_to_fill_name,
+                        remote_series,
+                        product,
+                        machine_learning_enabled,
+                    )
+                    self._save_source_series_cache(remote_series, source_cache_path)
+
+                    print(
+                        'Imputation of missing data for '
+                        + column_to_fill_name
+                        + ' from ERA5-Land raw remote variable was done.'
+                    )
                 
             elif product == 'merra2':
                 merra2_variables = {
@@ -1591,10 +1801,7 @@ class ClimateFiller():
                     'pr': 'PRECTOTCORR',
                     'wd': 'WD2M'
                 }
-
-                if canonical_column_to_fill_name not in merra2_variables:
-                    print(f'Invalid column_to_fill_name: {column_to_fill_name}')
-                    return
+                merra2_parameter = merra2_variables.get(canonical_column_to_fill_name, canonical_column_to_fill_name)
 
                 start = self.data.get_dataframe().index[0]
                 end = self.data.get_dataframe().index[-1]
@@ -1605,13 +1812,25 @@ class ClimateFiller():
                     lat,
                     start,
                     end,
+                    frequency=target_frequency,
                 )
-                if os.path.exists(source_cache_path):
+                legacy_source_cache_path = self._build_source_cache_path(
+                    product,
+                    canonical_column_to_fill_name,
+                    lon,
+                    lat,
+                    start,
+                    end,
+                    frequency=None,
+                )
+                source_cache_candidate = source_cache_path if os.path.exists(source_cache_path) else legacy_source_cache_path
+                if os.path.exists(source_cache_candidate):
+                    source_cache_path = source_cache_candidate
                     print(f"Reusing cached source data from: {source_cache_path}")
                     LOGGER.info("Source cache hit: %s", source_cache_path)
                     source_series = self._load_source_series_cache(source_cache_path)
                     self._fill_from_source_series(
-                        column_to_fill_name,
+                        target_column_to_fill_name,
                         source_series,
                         product,
                         machine_learning_enabled,
@@ -1633,7 +1852,7 @@ class ClimateFiller():
                     'latitude': lat,
                     'longitude': lon,
                     'community': community,
-                    'parameters': merra2_variables[canonical_column_to_fill_name],
+                    'parameters': merra2_parameter,
                     'format': format,
                     'user': 'ysouidi1',
                     'header': 'true',
@@ -1647,16 +1866,22 @@ class ClimateFiller():
                     return None
 
                 data_merra = response.json()
-                result = data_merra['properties']['parameter'][merra2_variables[canonical_column_to_fill_name]]
-                df = pd.DataFrame(result.items(), columns=['datetime', column_to_fill_name])
+                result = data_merra['properties']['parameter'].get(merra2_parameter)
+                if result is None:
+                    available = list(data_merra.get('properties', {}).get('parameter', {}).keys())
+                    raise ValueError(
+                        f"Remote variable '{canonical_column_to_fill_name}' not available in MERRA2 response. Available: {available}"
+                    )
+
+                df = pd.DataFrame(result.items(), columns=['datetime', target_column_to_fill_name])
                 df['datetime'] = pd.to_datetime(df['datetime'], format='%Y%m%d%H')
 
-                if len(self.data.get_missing_data_indexes_in_column(column_to_fill_name)) == 0:
+                if len(self.data.get_missing_data_indexes_in_column(target_column_to_fill_name)) == 0:
                     return
 
-                source_series = df.set_index('datetime')[column_to_fill_name]
+                source_series = df.set_index('datetime')[target_column_to_fill_name]
                 self._fill_from_source_series(
-                    column_to_fill_name,
+                    target_column_to_fill_name,
                     source_series,
                     product,
                     machine_learning_enabled,
@@ -1793,6 +2018,7 @@ class ClimateFiller():
                     if verbose is True:
                         print("{} has NO missing value!".format(c))
                 miss.append(miss_by_column)
+        print('Total number of missing values in the dataset: {}'.format(sum(miss)
         if verbose is False:
             return miss
     
@@ -2556,8 +2782,10 @@ class ClimateFiller():
             start_date = datetime.datetime.strptime(start_date, '%Y-%m-%d')
             end_date = datetime.datetime.strptime(end_date, '%Y-%m-%d')
         
+        frequency = self._infer_frequency_label_from_index(self.data.get_dataframe().index)
+
         for year in range(start_date.year, end_date.year + 1):
-            cache_path = 'data/cache/era5_land_' + '_'.join([str(s) for s in variables] + [str(self.lon), str(self.lat), str(year)]) + '.csv'
+            cache_path = self._build_era5_year_cache_path(variables, self.lon, self.lat, year, frequency=frequency)
             
             if os.path.exists(cache_path):
                 print(f"Time series already downloaded on: {cache_path}")
@@ -2801,7 +3029,7 @@ class ClimateFiller():
         if roi_geometry is None:
             if isinstance(roi, str):
                 ext = os.path.splitext(roi)[1].lower()
-                if ext == ".parquet":
+                if ext in (".parquet", ".geoparquet"):
                     roi_gdf = gpd.read_parquet(roi)
                 else:
                     roi_gdf = gpd.read_file(roi)
@@ -3054,7 +3282,7 @@ class ClimateFiller():
         if isinstance(roi, str):
             try:
                 ext = os.path.splitext(roi)[1].lower()
-                if ext == ".parquet":
+                if ext in (".parquet", ".geoparquet"):
                     roi_gdf = gpd.read_parquet(roi)
                 else:
                     roi_gdf = gpd.read_file(roi)
@@ -3320,7 +3548,7 @@ class ClimateFiller():
         if isinstance(roi, str):
             import geopandas as gpd
             ext = os.path.splitext(roi)[1].lower()
-            if ext == ".parquet":
+            if ext in (".parquet", ".geoparquet"):
                 gdf = gpd.read_parquet(roi)
             else:
                 gdf = gpd.read_file(roi)
@@ -3369,7 +3597,7 @@ class ClimateFiller():
         if roi_geometry is None:
             if isinstance(roi, str):
                 ext = os.path.splitext(roi)[1].lower()
-                if ext == ".parquet":
+                if ext in (".parquet", ".geoparquet"):
                     roi_gdf = gpd.read_parquet(roi)
                 else:
                     roi_gdf = gpd.read_file(roi)
@@ -5450,7 +5678,7 @@ class ClimateFiller():
         if isinstance(roi, str):
             try:
                 ext = os.path.splitext(roi)[1].lower()
-                if ext == ".parquet":
+                if ext in (".parquet", ".geoparquet"):
                     roi_gdf = gpd.read_parquet(roi)
                 else:
                     roi_gdf = gpd.read_file(roi)
@@ -5922,7 +6150,7 @@ class ClimateFiller():
         if isinstance(roi, str):
             try:
                 ext = os.path.splitext(roi)[1].lower()
-                if ext == ".parquet":
+                if ext in (".parquet", ".geoparquet"):
                     roi_gdf = gpd.read_parquet(roi)
                 else:
                     roi_gdf = gpd.read_file(roi)

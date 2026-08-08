@@ -142,7 +142,7 @@ def main():
     
     #data = DataFrame("data/oukaimeden_full_p_et0_bc.csv")
     
-    data_path = r"D:\chouaib\noaa_ground_stations_data_africa\africa_noaa_hourly\climate_noaa_hourly_h_ALGERIA_603510-99999_2016-01-01_2016-12-31.csv"
+    data_path = r"C:\Users\celhac\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\climate_noaa_hourly_h_ALGERIA_605220-99999_2016-01-01_2016-12-31.parquet"
     cf = ClimateFiller(
         data_path,
         datetime_column_name='date',
@@ -151,6 +151,8 @@ def main():
         )
     #cf = ClimateFiller(r"C:\Users\elhac\OneDrive\Desktop\kitchen\projects\pythonsnippets\data\california\cimis_data.csv")
     
+    # cf.show()
+    cf.missing_data_checking()
     
     # cf.impute(
     #     't2m',
@@ -160,6 +162,8 @@ def main():
     #     model_name="xgboost"
         
     # )
+    
+    
     # station_id,country,date,year,month,day,hour,lon,lat,alt,t2m,dpt2m,ws,wd,slp,visibility,rh
     # cf.resample(
     #     {
@@ -183,12 +187,26 @@ def main():
     #     keep_columns=['t2m_max', 't2m_min', 't2m_mean', 'rh_max', 'rh_min', 'rh_mean', 'ws_max', 'ws_min', 'ws_mean', 'lon', 'lat', 'alt'],
     # )
     
-    cf.to_geo_dataframe_batch(
-        input_folder=r"D:\chouaib\noaa_ground_stations_data_africa\resampled",
-        output_folder=r"D:\chouaib\noaa_ground_stations_data_africa\resampled_geo",
-        prefix=None
-    )
+    # cf.to_geo_dataframe_batch(
+    #     input_folder=r"D:\chouaib\noaa_ground_stations_data_africa\resampled",
+    #     output_folder=r"D:\chouaib\noaa_ground_stations_data_africa\resampled_geo",
+    #     prefix=None
+    # )
     
+    # cf.impute(
+    #     'rs',
+    #     # train_ratio=0.8,
+    #     # machine_learning_enabled=True,
+    #     # export_dataset=True,
+    #     # model_name="xgboost"
+        
+    # )
+    
+    # cf.export(
+    #     path_link=r"data\full.csv",
+    #     data_type='csv',
+        
+    # )
     
     # cf.show()
     
