@@ -87,7 +87,8 @@ class ClimateFiller():
             
         else:
             inferred_data_type = self._infer_data_type(data_path)
-            self.data = DataFrame(data_path=data_path, data_type=inferred_data_type, **kwargs)
+            self.data = self._create_data_wrapper(data_path, inferred_data_type, **kwargs)
+            self._materialize_dataset_for_column_ops()
             if datetime_column_name not in self.data.get_columns_names():
                 raise ValueError(
                     f"please enter a valide datetime column name. '{datetime_column_name}' was not found. "
@@ -100,6 +101,47 @@ class ClimateFiller():
             self.datetime_column_name = datetime_column_name
         
         self.data_reanalysis = DataFrame()
+
+    def _create_data_wrapper(self, data_path, inferred_data_type, **kwargs):
+        """Create the third-party dataframe wrapper in a way that works across versions."""
+        if isinstance(data_path, pd.DataFrame):
+            for candidate_data_type in ('dataframe', 'df'):
+                try:
+                    return DataFrame(data_path=data_path, data_type=candidate_data_type, **kwargs)
+                except Exception:
+                    continue
+
+            raise TypeError("Could not initialize dataframe wrapper from a pandas DataFrame.")
+
+        return DataFrame(data_path=data_path, data_type=inferred_data_type, **kwargs)
+
+    def _materialize_dataset_for_column_ops(self):
+        """Load parquet-backed datasets into an in-memory dataframe for column operations.
+
+        The third-party DataFrame wrapper exposes parquet datasets through pyarrow,
+        but its rename and column assignment helpers do not update the dataset
+        schema. Materializing the dataset once keeps later datetime normalization
+        and index operations consistent.
+        """
+        if getattr(self.data, 'data_type', None) != 'parquet':
+            return
+
+        if not hasattr(self.data, 'dataset') or self.data.dataset is None:
+            return
+
+        try:
+            pandas_df = self.data.dataset.to_table().to_pandas()
+        except Exception:
+            return
+
+        try:
+            self.data.set_dataframe(pandas_df, data_type='df')
+        except Exception:
+            if hasattr(self.data, 'dataframe'):
+                self.data.dataframe = pandas_df
+            else:
+                self.data.__dict__['dataframe'] = pandas_df
+        self.data.data_type = 'df'
 
     @staticmethod
     def _infer_data_type(data_path):
@@ -2018,7 +2060,7 @@ class ClimateFiller():
                     if verbose is True:
                         print("{} has NO missing value!".format(c))
                 miss.append(miss_by_column)
-        print('Total number of missing values in the dataset: {}'.format(sum(miss)
+        print('Detail of missing values in the dataset: {}'.format(miss))
         if verbose is False:
             return miss
     
