@@ -13,11 +13,11 @@ def main():
         lat=38.535694,
         )
     # for Davis
-    climate_filler.data.drop_column('et0_pm')
-    climate_filler.et0_estimation()
-    data_eto_pm = DataFrame(climate_filler.et0_output_data.dataframe, 'df')
-    climate_filler.et0_estimation(method='hs',)
-    eto_hs = climate_filler.et0_output_data.dataframe['et0_hs']
+    climate_filler.data.drop_column('eto_pm')
+    climate_filler.eto_estimation()
+    data_eto_pm = DataFrame(climate_filler.eto_output_data.dataframe, 'df')
+    climate_filler.eto_estimation(method='hs',)
+    eto_hs = climate_filler.eto_output_data.dataframe['eto_hs']
     
     climate_filler.extraterrestrial_radiation_daily()
     ra = climate_filler.data.resample_timeseries()['ra']

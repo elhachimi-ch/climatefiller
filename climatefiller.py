@@ -38,6 +38,9 @@ if not LOGGER.handlers:
 class ClimateFiller():
     """The ClimateFiller class
     """
+
+    # ET0 models that require elevation in row inputs.
+    ELEVATION_REQUIRED_ETO_METHODS = frozenset({'pm', 'pt', 'mk'})
     
     def __init__(self, data_path=None, datetime_column_name='datetime', 
                  datetime_format='%Y-%m-%d %H:%M:%S', backend='gee', 
@@ -52,6 +55,8 @@ class ClimateFiller():
             datetime_column_name (str): The name of the column that contains datetime information. Defaults to 'datetime'.
             date_time_format (str): The format of the datetime values in the data source. Defaults to '%Y-%m-%d %H:%M:%S'.
             tz_offset (int): The time zone offset in hours comparint to GMT. Defaults to -7.
+            elevation (float, int, str, or None): Station elevation in meters. If a number, it is used directly.
+                If a string, it is treated as the elevation column name in the dataset. Defaults to None.
         Returns:
             None
 
@@ -83,7 +88,7 @@ class ClimateFiller():
             'model_kwargs': {},
             'export_dataset': False,
         }
-        self.et0_output_data = DataFrame()
+        self.eto_output_data = DataFrame()
         self.data = DataFrame()
         if backend == 'gee':
             gee_project = self._get_gee_project_name()
@@ -141,6 +146,109 @@ class ClimateFiller():
                     resolved = pd.to_numeric(lat_value, errors='coerce')
                     if not resolved.dropna().empty:
                         self.lat = float(resolved.dropna().iloc[0])
+
+        if isinstance(self.elevation, str):
+            if self.elevation not in dataframe.columns:
+                raise ValueError(
+                    f"Elevation column '{self.elevation}' was not found. "
+                    f"Available columns: {list(dataframe.columns)}"
+                )
+            # Keep the column name; values are resolved when ET0 methods need elevation.
+        elif self.elevation is not None and not isinstance(self.elevation, (int, float, np.number)):
+            raise TypeError(
+                "elevation must be a number (meters), a column name string, or None. "
+                f"Got type {type(self.elevation).__name__}."
+            )
+        elif isinstance(self.elevation, (int, float, np.number)):
+            self.elevation = float(self.elevation)
+
+    def _get_numeric_elevation(self):
+        """
+        Return a scalar elevation in meters.
+
+        Priority:
+        1. numeric self.elevation
+        2. first valid value from elevation column when self.elevation is a column name
+        3. Lib.get_elevation(lat, lon) when self.elevation is None
+        """
+        if isinstance(self.elevation, (int, float, np.number)):
+            return float(self.elevation)
+
+        if isinstance(self.elevation, str):
+            source_df = self._get_underlying_dataframe()
+            if source_df is None or self.elevation not in source_df.columns:
+                raise ValueError(
+                    f"Elevation column '{self.elevation}' was not found. "
+                    f"Available columns: {list(source_df.columns) if source_df is not None else []}"
+                )
+            elev_series = pd.to_numeric(source_df[self.elevation], errors='coerce').dropna()
+            if elev_series.empty:
+                raise ValueError(f"Elevation column '{self.elevation}' does not contain numeric values.")
+            return float(elev_series.iloc[0])
+
+        if self.elevation is None:
+            return Lib.get_elevation(self.lat, self.lon)
+
+        raise TypeError(
+            "elevation must be a number (meters), a column name string, or None. "
+            f"Got type {type(self.elevation).__name__}."
+        )
+
+    def _add_elevation_column(self, target):
+        """
+        Attach elevation to an ET0 working dataframe.
+
+        - number: constant elevation value
+        - string: elevation column from in-situ data
+        - None: fetch elevation from coordinates (Lib.get_elevation)
+        """
+        if isinstance(self.elevation, (int, float, np.number)):
+            target.add_one_value_column('elevation', float(self.elevation))
+            return
+
+        if isinstance(self.elevation, str):
+            source_df = self._get_underlying_dataframe()
+            if source_df is None or self.elevation not in source_df.columns:
+                raise ValueError(
+                    f"Elevation column '{self.elevation}' was not found. "
+                    f"Available columns: {list(source_df.columns) if source_df is not None else []}"
+                )
+
+            elev_series = pd.to_numeric(source_df[self.elevation], errors='coerce')
+            target_df = target.get_dataframe()
+            aligned = elev_series.reindex(target_df.index)
+
+            if aligned.notna().any():
+                fill_value = elev_series.dropna().iloc[0] if not elev_series.dropna().empty else np.nan
+                if aligned.isna().any() and pd.notna(fill_value):
+                    aligned = aligned.fillna(fill_value)
+                target.add_column('elevation', aligned)
+            else:
+                if elev_series.dropna().empty:
+                    raise ValueError(f"Elevation column '{self.elevation}' does not contain numeric values.")
+                target.add_one_value_column('elevation', float(elev_series.dropna().iloc[0]))
+            return
+
+        if self.elevation is None:
+            target.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
+            return
+
+        raise TypeError(
+            "elevation must be a number (meters), a column name string, or None. "
+            f"Got type {type(self.elevation).__name__}."
+        )
+
+    @classmethod
+    def _eto_method_requires_elevation(cls, method):
+        return str(method).lower().strip() in cls.ELEVATION_REQUIRED_ETO_METHODS
+
+    def _ensure_elevation_for_eto_method(self, method, target):
+        """
+        For ET0 models that need elevation, attach it to target using:
+        number -> constant value, column name -> dataset column, None -> Lib.get_elevation.
+        """
+        if self._eto_method_requires_elevation(method):
+            self._add_elevation_column(target)
 
     def _normalize_datetime_column(self, column_name, datetime_format='%Y-%m-%d %H:%M:%S'):
         dataframe = self._get_underlying_dataframe().copy()
@@ -707,6 +815,76 @@ class ClimateFiller():
         )
         return legacy_path
 
+    @staticmethod
+    def _era5_cache_value_columns(cache_path):
+        """Return numeric value columns in an ERA5 yearly cache CSV (excluding datetime/index)."""
+        if not cache_path or not os.path.exists(cache_path):
+            return []
+
+        try:
+            dataframe = pd.read_csv(cache_path, nrows=5)
+        except Exception:
+            return []
+
+        skip_names = {
+            'datetime', 'date', 'time', 'timestamp', 'valid_time',
+            'system:index', '.geo', 'geometry', 'lon', 'lat', 'longitude', 'latitude',
+        }
+        value_columns = []
+        for col in dataframe.columns:
+            col_name = str(col)
+            if col_name in skip_names or col_name.startswith('Unnamed'):
+                continue
+            if pd.api.types.is_numeric_dtype(dataframe[col]):
+                value_columns.append(col_name)
+        return value_columns
+
+    def _era5_cache_is_valid(self, cache_path):
+        return len(self._era5_cache_value_columns(cache_path)) > 0
+
+    def _invalidate_era5_cache_if_invalid(self, cache_path):
+        """Remove ERA5 cache files that exist but contain no usable value column."""
+        if cache_path and os.path.exists(cache_path) and not self._era5_cache_is_valid(cache_path):
+            LOGGER.warning("Removing invalid ERA5 cache (no value column): %s", cache_path)
+            print(f"Removing invalid ERA5 cache (no value column): {cache_path}")
+            os.remove(cache_path)
+            return True
+        return False
+
+    @staticmethod
+    def _ensure_era5_value_column(data, target_column, candidate_names):
+        """
+        Rename the ERA5 value column to a stable target name.
+
+        GEE/geemap exports may use 'first', the band name, or another numeric column.
+        """
+        columns = list(data.get_columns_names())
+        if target_column in columns:
+            return target_column
+
+        for candidate in candidate_names:
+            if candidate in columns:
+                data.rename_columns({candidate: target_column})
+                return target_column
+
+        dataframe = data.get_dataframe()
+        skip_names = {
+            'datetime', 'date', 'time', 'timestamp', 'valid_time',
+            'system:index', '.geo', 'geometry', 'lon', 'lat', 'longitude', 'latitude',
+        }
+        for col in dataframe.columns:
+            col_name = str(col)
+            if col_name in skip_names or col_name.startswith('Unnamed'):
+                continue
+            if pd.api.types.is_numeric_dtype(dataframe[col]):
+                data.rename_columns({col: target_column})
+                return target_column
+
+        raise ValueError(
+            f"Could not find ERA5 value column to map to '{target_column}'. "
+            f"Tried {list(candidate_names)}. Available columns: {columns}"
+        )
+
     def _build_source_cache_path(self, product, variable, lon, lat, start_datetime, end_datetime, frequency=None):
         start_ts = pd.to_datetime(start_datetime).strftime('%Y%m%d%H%M%S')
         end_ts = pd.to_datetime(end_datetime).strftime('%Y%m%d%H%M%S')
@@ -1112,6 +1290,21 @@ class ClimateFiller():
         return self.data.get_dataframe()
 
     @staticmethod
+    def _attach_crs_to_dataframe(df, crs):
+        if crs is None or df is None:
+            return df
+        try:
+            df.crs = crs
+        except Exception:
+            pass
+        if hasattr(df, 'attrs'):
+            try:
+                df.attrs['crs'] = crs
+            except Exception:
+                pass
+        return df
+
+    @staticmethod
     def _load_dataframe_from_path(file_path):
         data_type = ClimateFiller._infer_data_type(file_path)
         if data_type == 'csv':
@@ -1121,7 +1314,14 @@ class ClimateFiller():
         if data_type == 'json':
             return pd.read_json(file_path)
         if data_type == 'parquet':
-            return pd.read_parquet(file_path)
+            try:
+                gdf = gpd.read_parquet(file_path)
+            except Exception:
+                return pd.read_parquet(file_path)
+
+            source_crs = getattr(gdf, 'crs', None)
+            df = pd.DataFrame(gdf.drop(columns='geometry', errors='ignore'))
+            return ClimateFiller._attach_crs_to_dataframe(df, source_crs)
         raise ValueError(f"Unsupported file type for batch resample: {file_path}")
 
     @staticmethod
@@ -1293,6 +1493,28 @@ class ClimateFiller():
 
         return output_paths
 
+    def _dataframe_with_datetime_column(self, datetime_column_name=None):
+        """
+        Return a copy of the in-situ dataframe with datetime restored as a column.
+
+        After initialization, datetime is typically stored as the index only.
+        """
+        df = self.data.get_dataframe().copy()
+        out_name = datetime_column_name or self.datetime_column_name or 'datetime'
+
+        if out_name in df.columns:
+            return df
+
+        # Prefer the internal datetime column name if present.
+        if self.datetime_column_name in df.columns:
+            if self.datetime_column_name != out_name:
+                return df.rename(columns={self.datetime_column_name: out_name})
+            return df
+
+        df[out_name] = pd.to_datetime(df.index)
+        ordered_columns = [out_name] + [col for col in df.columns if col != out_name]
+        return df[ordered_columns]
+
     def impute_batch(self, input_folder, output_folder, column_to_fill_list='ta', product='era5_land', machine_learning_enabled=False, train_ratio=1, model_name='xgboost', export_dataset=False, prefix=None, datetime_format='%Y-%m-%d %H:%M:%S', **kwargs):
         """
         Batch impute files from input_folder and save the imputed results to output_folder.
@@ -1311,6 +1533,9 @@ class ClimateFiller():
 
         Returns:
             list: Output file paths generated.
+
+        Notes:
+            - Parquet/GeoParquet outputs preserve the original file CRS when available.
         """
         if not os.path.isdir(input_folder):
             raise ValueError(f"input_folder does not exist: {input_folder}")
@@ -1373,6 +1598,7 @@ class ClimateFiller():
                 tz_offset=self.tz_offset,
                 elevation=self.elevation,
                 artifact_folder=self.artifact_folder,
+                frequency=self.frequency,
             )
             imputer.impute(
                 column_to_fill_list=column_to_fill_list,
@@ -1383,7 +1609,23 @@ class ClimateFiller():
                 export_dataset=export_dataset,
                 **kwargs,
             )
-            self._save_dataframe_to_path(imputer.data.get_dataframe().copy(), output_path)
+
+            extension = os.path.splitext(filename)[1].lower()
+            source_crs = getattr(imputer, '_source_crs', None)
+            export_df = imputer._dataframe_with_datetime_column(detected_datetime_column)
+            if extension in ('.parquet', '.geoparquet', '.pq', '.pqt') and (
+                source_crs is not None or extension == '.geoparquet'
+            ):
+                # Preserve the original file CRS when writing GeoParquet outputs.
+                # Temporarily attach datetime column so geospatial export includes it.
+                original_df = imputer.data.get_dataframe()
+                imputer.data.set_dataframe(export_df)
+                try:
+                    imputer.to_geo_dataframe(output_path, crs=source_crs)
+                finally:
+                    imputer.data.set_dataframe(original_df)
+            else:
+                self._save_dataframe_to_path(export_df, output_path)
             output_paths.append(output_path)
             LOGGER.info("Imputed file saved: %s", output_path)
 
@@ -1788,7 +2030,11 @@ class ClimateFiller():
                         data_year = DataFrame(cache_path)
                         data.append_dataframe(data_year.dataframe)
                         
-                    data.rename_columns({'first': 't2m'})
+                    self._ensure_era5_value_column(
+                        data,
+                        't2m',
+                        ['first', 'temperature_2m', 't2m', 'ta'],
+                    )
                     data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
                     data.missing_data('t2m')
                     data.transform_column('t2m', lambda o: o - 273.15)
@@ -1857,7 +2103,11 @@ class ClimateFiller():
                         data_year = DataFrame(cache_path)
                         data.append_dataframe(data_year.dataframe)
                         
-                    data.rename_columns({'first': 'ssrd'})
+                    self._ensure_era5_value_column(
+                        data,
+                        'ssrd',
+                        ['first', 'surface_solar_radiation_downwards', 'ssrd', 'rs'],
+                    )
                     data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
                     data.missing_data('ssrd')
                     l = []
@@ -1893,7 +2143,11 @@ class ClimateFiller():
                         data_year = DataFrame(cache_path)
                         data.append_dataframe(data_year.dataframe)
                         
-                    data.rename_columns({'first': 'tp'})
+                    self._ensure_era5_value_column(
+                        data,
+                        'tp',
+                        ['first', 'total_precipitation', 'tp', 'p'],
+                    )
                     data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
                     data.missing_data('tp')
                     nan_indices = self.data.get_nan_indexes_of_column(target_column_to_fill_name)
@@ -2750,7 +3004,7 @@ class ClimateFiller():
             self.data.transform_column(column_name, lambda o: round(o, nbr_decimal_places))
         self.data.reindex_dataframe(self.datetime_column_name)
     
-    def et0_estimation(self, 
+    def eto_estimation(self, 
                        ta_column_name='ta',
                        rs_column_name='rs',
                        rh_column_name='rh',
@@ -2806,6 +3060,9 @@ class ClimateFiller():
             data_temp.add_one_value_column('lat', self.lat)
             data_temp.add_one_value_column('lon', self.lon)
             data_temp.reindex_dataframe(self.datetime_column_name)
+
+            # Any model needing elevation: number / column name / None -> Lib.get_elevation
+            self._ensure_elevation_for_eto_method(method, data_temp)
             
             if method == 'pm':
                 data_temp.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[rh_column_name])
@@ -2814,23 +3071,18 @@ class ClimateFiller():
                 data_temp.add_column('ws_mean', self.data.resample_timeseries(in_place=False)[ws_column_name])
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
                 
-                if self.elevation is None:
-                    data_temp.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
-                else:
-                    data_temp.add_one_value_column('elevation', self.elevation)
-                
-                data_temp.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith_daily(row))
-                data_temp.transform_column('et0_pm', lambda o: o if o > 0 else 0)
-                data_temp.transform_column('et0_pm', lambda o: round(o, nbr_decimal_places))
+                data_temp.add_column_based_on_function('eto_pm', lambda row: Lib.eto_penman_monteith_daily(row))
+                data_temp.transform_column('eto_pm', lambda o: o if o > 0 else 0)
+                data_temp.transform_column('eto_pm', lambda o: round(o, nbr_decimal_places))
             
             elif method == 'hs':
-                data_temp.add_column_based_on_function('et0_hs', lambda row: Lib.et0_hargreaves_samani(
+                data_temp.add_column_based_on_function('eto_hs', lambda row: Lib.eto_hargreaves_samani(
                     row,
                     c=c_hs,
                     a=a_hs,
                     b=b_hs))
-                data_temp.transform_column('et0_hs', lambda o: o if o > 0 else 0)
-                data_temp.transform_column('et0_hs', lambda o: round(o, nbr_decimal_places))
+                data_temp.transform_column('eto_hs', lambda o: o if o > 0 else 0)
+                data_temp.transform_column('eto_hs', lambda o: round(o, nbr_decimal_places))
 
             elif method == 'pt':
                 data_temp.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[rh_column_name])
@@ -2838,64 +3090,53 @@ class ClimateFiller():
                 data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
                 
-                if self.elevation is None:
-                    data_temp.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
-                else:
-                    data_temp.add_one_value_column('elevation', self.elevation)
-                
                 data_temp.add_one_value_column('lat', self.lat)
                 
-                data_temp.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily(row, alpha_pt))
-                data_temp.transform_column('et0_pt', lambda o: o if o > 0 else 0)
-                data_temp.transform_column('et0_pt', lambda o: round(o, nbr_decimal_places))
+                data_temp.add_column_based_on_function('eto_pt', lambda row: Lib.eto_priestley_taylor_daily(row, alpha_pt))
+                data_temp.transform_column('eto_pt', lambda o: o if o > 0 else 0)
+                data_temp.transform_column('eto_pt', lambda o: round(o, nbr_decimal_places))
                 
                 
             elif method == 'sd':
                 data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
-                data_temp.add_column_based_on_function('et0_sd', Lib.et0_schendel)
+                data_temp.add_column_based_on_function('eto_sd', Lib.eto_schendel)
                 
             elif method == 'ab':
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
-                data_temp.add_column_based_on_function('et0_ab', lambda row: Lib.et0_abtew(row, k1=k1_ab))
-                data_temp.transform_column('et0_ab', lambda o: round(o, nbr_decimal_places))
+                data_temp.add_column_based_on_function('eto_ab', lambda row: Lib.eto_abtew(row, k1=k1_ab))
+                data_temp.transform_column('eto_ab', lambda o: round(o, nbr_decimal_places))
                 
             elif method == 'tu':
                 data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
-                data_temp.add_column_based_on_function('et0_tu', Lib.et0_turc)
+                data_temp.add_column_based_on_function('eto_tu', Lib.eto_turc)
            
             elif method == 'mk':
-                if self.elevation is None:
-                    data_temp.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
-                else:
-                    data_temp.add_one_value_column('elevation', self.elevation)
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
-                data_temp.add_column_based_on_function('et0_mk', Lib.et0_makkink)
-                data_temp.transform_column('et0_mk', lambda o: o if o > 0 else 0)
-                data_temp.transform_column('et0_mk', lambda o: round(o, nbr_decimal_places))
+                data_temp.add_column_based_on_function('eto_mk', Lib.eto_makkink)
+                data_temp.transform_column('eto_mk', lambda o: o if o > 0 else 0)
+                data_temp.transform_column('eto_mk', lambda o: round(o, nbr_decimal_places))
             
-            self.et0_output_data.set_dataframe(data_temp.get_dataframe())
+            self.eto_output_data.set_dataframe(data_temp.get_dataframe())
                 
         elif freq == 'h':
-            self.et0_output_data.dataframe = self.data.dataframe.copy()
-            self.et0_output_data.transform_column(rs_column_name, lambda o: o if o > 0 else 0)
-            self.et0_output_data.index_to_column()
-            self.et0_output_data.add_doy_column(datetime_column_name=self.datetime_column_name)
-            self.et0_output_data.add_hod_column(datetime_column_name=self.datetime_column_name)
-            self.et0_output_data.transform_column('hod', lambda o: o + 1)
-            self.et0_output_data.reindex_dataframe(self.datetime_column_name)
+            self.eto_output_data.dataframe = self.data.dataframe.copy()
+            self.eto_output_data.transform_column(rs_column_name, lambda o: o if o > 0 else 0)
+            self.eto_output_data.index_to_column()
+            self.eto_output_data.add_doy_column(datetime_column_name=self.datetime_column_name)
+            self.eto_output_data.add_hod_column(datetime_column_name=self.datetime_column_name)
+            self.eto_output_data.transform_column('hod', lambda o: o + 1)
+            self.eto_output_data.reindex_dataframe(self.datetime_column_name)
             
-            if self.elevation is None:
-                self.et0_output_data.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
-            else:
-                self.et0_output_data.add_one_value_column('elevation', self.elevation)
+            # Any model needing elevation: number / column name / None -> Lib.get_elevation
+            self._ensure_elevation_for_eto_method(method, self.eto_output_data)
                 
-            self.et0_output_data.add_one_value_column('lat', self.lat)
-            self.et0_output_data.add_one_value_column('lon', self.lon)
+            self.eto_output_data.add_one_value_column('lat', self.lat)
+            self.eto_output_data.add_one_value_column('lon', self.lon)
             
             
             if method == 'pm':
-                self.et0_output_data.add_column_based_on_function('et0_pm', lambda row: Lib.et0_penman_monteith_hourly(
+                self.eto_output_data.add_column_based_on_function('eto_pm', lambda row: Lib.eto_penman_monteith_hourly(
                     row, 
                     ta_column_name,
                     rs_column_name,
@@ -2904,28 +3145,572 @@ class ClimateFiller():
                     self.tz_offset,
                     reference_crop
                     ))
-                self.et0_output_data.transform_column('et0_pm', lambda o: o if o > 0 else 0)
-                self.et0_output_data.transform_column('et0_pm', lambda o: round(o, 2))
+                self.eto_output_data.transform_column('eto_pm', lambda o: o if o > 0 else 0)
+                self.eto_output_data.transform_column('eto_pm', lambda o: round(o, 2))
                 
             
             elif method == 'pt':
-                self.et0_output_data.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor(
+                self.eto_output_data.add_column_based_on_function('eto_pt', lambda row: Lib.eto_priestley_taylor(
                     row, 
                     ta_column_name,
                     rs_column_name,
                     rh_column_name,
                     reference_crop))
-                self.et0_output_data.transform_column('et0_pt', lambda o: o if o > 0 else 0)
+                self.eto_output_data.transform_column('eto_pt', lambda o: o if o > 0 else 0)
                 
             elif method == 'ab':
-                self.et0_output_data.add_column_based_on_function('et0_ab', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
+                self.eto_output_data.add_column_based_on_function('eto_ab', lambda row: Lib.eto_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
             elif method == 'tu':
-                self.et0_output_data.add_column_based_on_function('et0_tu', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
+                self.eto_output_data.add_column_based_on_function('eto_tu', lambda row: Lib.eto_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
             elif method == 'sd':
-                self.et0_output_data.add_column_based_on_function('et0_sd', lambda row: Lib.et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
+                self.eto_output_data.add_column_based_on_function('eto_sd', lambda row: Lib.eto_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
 
             
-        return self.et0_output_data.get_dataframe()
+        return self.eto_output_data.get_dataframe()
+
+    def eto_estimation_batch(
+        self,
+        input_folder,
+        output_folder,
+        ta_column_name='ta',
+        rs_column_name='rs',
+        rh_column_name='rh',
+        ws_column_name='ws',
+        method='pm',
+        freq='d',
+        reference_crop='grass',
+        nbr_decimal_places=2,
+        c_hs=0.0023,
+        a_hs=17.8,
+        b_hs=0.5,
+        k1_ab=0.53,
+        alpha_pt=1.26,
+        prefix=None,
+        datetime_format='%Y-%m-%d %H:%M:%S',
+    ):
+        """
+        Batch ET0 estimation for all supported files in input_folder.
+
+        Uses the same per-file processing pattern as impute_batch() / eto_estimation_daily_batch():
+        load file -> eto_estimation() -> export with the original extension.
+
+        Args:
+            input_folder (str): Folder containing weather files.
+            output_folder (str): Destination folder for ET0 output files.
+            ta_column_name, rs_column_name, rh_column_name, ws_column_name:
+                Column aliases passed to eto_estimation().
+            method (str): ET0 model. Supported: 'pm', 'hs', 'pt', 'sd', 'ab', 'tu', 'mk'.
+            freq (str): Estimation frequency passed to eto_estimation(), e.g. 'd' or 'h'.
+            reference_crop (str): Reference crop for hourly PM/PT methods.
+            nbr_decimal_places (int): Rounding precision for ET0 outputs.
+            c_hs, a_hs, b_hs, k1_ab, alpha_pt: Model coefficients.
+            prefix (str or None): If provided, process only files that start with prefix.
+            datetime_format (str): Datetime parsing format for per-file initialization.
+
+        Returns:
+            list: Output file paths generated.
+
+        Notes:
+            - Output files keep the same filename/extension as the source files.
+            - GeoParquet/parquet sources with CRS are exported as GeoParquet with the same CRS.
+            - Exported content comes from eto_output_data (including datetime).
+        """
+        if not os.path.isdir(input_folder):
+            raise ValueError(f"input_folder does not exist: {input_folder}")
+
+        self.check_directory_existance(output_folder)
+
+        supported_exts = {'.csv', '.xls', '.xlsx', '.json', '.parquet', '.geoparquet', '.pq', '.pqt'}
+        files = []
+        for name in os.listdir(input_folder):
+            path = os.path.join(input_folder, name)
+            if not os.path.isfile(path):
+                continue
+            if prefix is not None and not name.startswith(prefix):
+                continue
+            if os.path.splitext(name)[1].lower() not in supported_exts:
+                continue
+            files.append(name)
+
+        files = sorted(files)
+        if len(files) == 0:
+            LOGGER.warning(
+                "No input files found for eto_estimation_batch in %s with prefix=%s",
+                input_folder,
+                prefix,
+            )
+            return []
+
+        LOGGER.info(
+            "Starting batch ET0: %d file(s), method=%s, freq=%s, prefix=%s",
+            len(files),
+            method,
+            freq,
+            prefix,
+        )
+
+        output_paths = []
+        file_iter = tqdm(files, total=len(files), desc="Batch ET0", unit="file")
+        for filename in file_iter:
+            file_iter.set_postfix_str(filename)
+            input_path = os.path.join(input_folder, filename)
+            output_path = os.path.join(output_folder, filename)
+
+            input_df = self._load_dataframe_from_path(input_path)
+            datetime_column_candidates = [self.datetime_column_name, 'datetime', 'date', 'time', 'timestamp']
+            detected_datetime_column = None
+            for candidate in datetime_column_candidates:
+                if candidate in input_df.columns:
+                    detected_datetime_column = candidate
+                    break
+            if detected_datetime_column is None:
+                detected_datetime_column = next(
+                    (col for col in input_df.columns if pd.api.types.is_datetime64_any_dtype(input_df[col])),
+                    None,
+                )
+            if detected_datetime_column is None:
+                raise ValueError(
+                    f"Could not infer a datetime column for batch ET0 from file: {input_path}"
+                )
+
+            source_crs = getattr(input_df, 'crs', None)
+            if source_crs is None and hasattr(input_df, 'attrs'):
+                source_crs = input_df.attrs.get('crs')
+
+            estimator = self.__class__(
+                data_path=input_df,
+                datetime_column_name=detected_datetime_column,
+                datetime_format=datetime_format,
+                backend=self.backend,
+                lat=self.lat,
+                lon=self.lon,
+                tz_offset=self.tz_offset,
+                elevation=self.elevation,
+                artifact_folder=self.artifact_folder,
+                frequency=self.frequency or freq,
+            )
+            if source_crs is not None:
+                estimator._source_crs = source_crs
+
+            estimator.eto_estimation(
+                ta_column_name=ta_column_name,
+                rs_column_name=rs_column_name,
+                rh_column_name=rh_column_name,
+                ws_column_name=ws_column_name,
+                method=method,
+                freq=freq,
+                reference_crop=reference_crop,
+                nbr_decimal_places=nbr_decimal_places,
+                c_hs=c_hs,
+                a_hs=a_hs,
+                b_hs=b_hs,
+                k1_ab=k1_ab,
+                alpha_pt=alpha_pt,
+            )
+
+            export_df = estimator.eto_output_data.get_dataframe().copy()
+            if detected_datetime_column not in export_df.columns:
+                if estimator.datetime_column_name in export_df.columns:
+                    export_df = export_df.rename(
+                        columns={estimator.datetime_column_name: detected_datetime_column}
+                    )
+                else:
+                    export_df[detected_datetime_column] = pd.to_datetime(export_df.index)
+                    ordered = [detected_datetime_column] + [
+                        col for col in export_df.columns if col != detected_datetime_column
+                    ]
+                    export_df = export_df[ordered]
+            estimator.eto_output_data.set_dataframe(export_df)
+
+            extension = os.path.splitext(filename)[1].lower()
+            source_crs = getattr(estimator, '_source_crs', source_crs)
+            if extension in ('.parquet', '.geoparquet', '.pq', '.pqt') and (
+                source_crs is not None or extension == '.geoparquet'
+            ):
+                # Export eto_output_data as GeoParquet with the original CRS.
+                original_df = estimator.data.get_dataframe()
+                estimator.data.set_dataframe(export_df)
+                try:
+                    estimator.to_geo_dataframe(output_path, crs=source_crs)
+                finally:
+                    estimator.data.set_dataframe(original_df)
+            else:
+                # Keep same tabular extension as the source file.
+                self._save_dataframe_to_path(export_df, output_path)
+
+            output_paths.append(output_path)
+            LOGGER.info("ET0 file saved: %s", output_path)
+
+        LOGGER.info("Batch ET0 completed: %d output file(s)", len(output_paths))
+        return output_paths
+
+    def eto_estimation_daily(
+        self,
+        ta_max_column_name='ta_max',
+        ta_min_column_name='ta_min',
+        ta_mean_column_name='ta_mean',
+        rh_max_column_name='rh_max',
+        rh_min_column_name='rh_min',
+        rh_mean_column_name='rh_mean',
+        ws_mean_column_name='ws_mean',
+        rs_mean_column_name='rs_mean',
+        methods_list=None,
+        nbr_decimal_places=2,
+        c_hs=0.0023,
+        a_hs=17.8,
+        b_hs=0.5,
+        k1_ab=0.53,
+        alpha_pt=1.26,
+    ):
+        """
+        Estimate daily reference evapotranspiration (ET0) from an already-daily weather dataset.
+
+        Unlike eto_estimation(), this method does not resample. It expects pre-aggregated
+        daily columns and maps them to the internal names required by each ET0 model.
+
+        Args:
+            ta_max_column_name (str): Daily maximum air temperature column. Defaults to 'ta_max'.
+            ta_min_column_name (str): Daily minimum air temperature column. Defaults to 'ta_min'.
+            ta_mean_column_name (str): Daily mean air temperature column. Defaults to 'ta_mean'.
+                If missing, it is derived as (ta_max + ta_min) / 2 when both are available.
+            rh_max_column_name (str): Daily maximum relative humidity column. Defaults to 'rh_max'.
+            rh_min_column_name (str): Daily minimum relative humidity column. Defaults to 'rh_min'.
+            rh_mean_column_name (str): Daily mean relative humidity column. Defaults to 'rh_mean'.
+            ws_mean_column_name (str): Daily mean wind speed column. Defaults to 'ws_mean'.
+            rs_mean_column_name (str): Daily mean solar radiation column. Defaults to 'rs_mean'.
+            methods_list (list[str] or str or None): ET0 model(s) to estimate. Each method adds one
+                output column (e.g. 'eto_pm', 'eto_hs') to eto_output_data. Defaults to ['pm'].
+                Supported: 'pm', 'hs', 'pt', 'sd', 'ab', 'tu', 'mk'.
+            nbr_decimal_places (int): Rounding precision for ET0 outputs. Defaults to 2.
+            c_hs, a_hs, b_hs: Hargreaves-Samani coefficients.
+            k1_ab: Abtew coefficient.
+            alpha_pt: Priestley-Taylor coefficient.
+
+        Returns:
+            pandas.DataFrame: Daily dataframe with ET0 column(s) and supporting columns.
+
+        Notes:
+            Required daily variables by method:
+            - pm: ta_max, ta_min, rh_max, rh_min, ws_mean, rs_mean (+ lat, elevation, doy)
+            - hs: ta_mean, ta_max, ta_min (+ lat, doy)
+            - pt: ta_max, ta_min, rh_max, rh_min, rs_mean (+ lat, elevation, doy)
+            - sd: ta_mean, rh_mean
+            - ab: rs_mean
+            - tu: ta_mean, rh_mean, rs_mean
+            - mk: ta_mean, rs_mean (+ elevation)
+        """
+        if methods_list is None:
+            methods_list = ['pm']
+        elif isinstance(methods_list, str):
+            methods_list = [methods_list]
+        elif not isinstance(methods_list, (list, tuple, set)):
+            raise TypeError(
+                "methods_list must be a list/tuple/set of method names, a single method string, or None. "
+                f"Got type {type(methods_list).__name__}."
+            )
+
+        supported_methods = {'pm', 'hs', 'pt', 'sd', 'ab', 'tu', 'mk'}
+        methods = []
+        for raw_method in methods_list:
+            method = str(raw_method).lower().strip()
+            if method not in supported_methods:
+                raise ValueError(
+                    f"Unsupported ET0 method '{raw_method}'. Supported methods: {sorted(supported_methods)}"
+                )
+            if method not in methods:
+                methods.append(method)
+        if len(methods) == 0:
+            raise ValueError("methods_list must contain at least one ET0 method.")
+
+        source_df = self.data.get_dataframe()
+        if source_df is None or len(source_df) == 0:
+            raise ValueError("No in-situ data available for daily ET0 estimation.")
+
+        available_columns = set(source_df.columns)
+        column_aliases = {
+            'ta_max': ta_max_column_name,
+            'ta_min': ta_min_column_name,
+            'ta_mean': ta_mean_column_name,
+            'rh_max': rh_max_column_name,
+            'rh_min': rh_min_column_name,
+            'rh_mean': rh_mean_column_name,
+            'ws_mean': ws_mean_column_name,
+            'rs_mean': rs_mean_column_name,
+        }
+
+        required_by_method = {
+            'pm': ['ta_max', 'ta_min', 'rh_max', 'rh_min', 'ws_mean', 'rs_mean'],
+            'hs': ['ta_mean', 'ta_max', 'ta_min'],
+            'pt': ['ta_max', 'ta_min', 'rh_max', 'rh_min', 'rs_mean'],
+            'sd': ['ta_mean', 'rh_mean'],
+            'ab': ['rs_mean'],
+            'tu': ['ta_mean', 'rh_mean', 'rs_mean'],
+            'mk': ['ta_mean', 'rs_mean'],
+        }
+        required_canonical = []
+        for method in methods:
+            for canonical in required_by_method[method]:
+                if canonical not in required_canonical:
+                    required_canonical.append(canonical)
+        optional_canonical = ['ta_max', 'ta_min', 'ta_mean', 'rh_max', 'rh_min', 'rh_mean', 'ws_mean', 'rs_mean']
+
+        def _can_derive_ta_mean():
+            return (
+                column_aliases['ta_max'] in available_columns
+                and column_aliases['ta_min'] in available_columns
+            )
+
+        def _resolve_series(canonical):
+            source_column = column_aliases[canonical]
+            if source_column in available_columns:
+                return source_df[source_column]
+            if canonical == 'ta_mean' and _can_derive_ta_mean():
+                return (source_df[column_aliases['ta_max']] + source_df[column_aliases['ta_min']]) / 2.0
+            return None
+
+        missing_source_columns = []
+        for canonical in required_canonical:
+            if _resolve_series(canonical) is None:
+                missing_source_columns.append(column_aliases[canonical])
+        if missing_source_columns:
+            raise ValueError(
+                f"Missing required daily column(s) for methods {methods}: {missing_source_columns}. "
+                f"Available columns: {list(source_df.columns)}"
+            )
+
+        working_df = pd.DataFrame(index=source_df.index)
+        for canonical in optional_canonical:
+            series = _resolve_series(canonical)
+            if series is not None:
+                working_df[canonical] = series
+
+        data_temp = DataFrame()
+        data_temp.set_dataframe(working_df)
+        data_temp.index_to_column()
+        data_temp.add_doy_column(datetime_column_name=self.datetime_column_name)
+        data_temp.add_one_value_column('lat', self.lat)
+        data_temp.add_one_value_column('lon', self.lon)
+        data_temp.reindex_dataframe(self.datetime_column_name)
+
+        # Elevation once if any selected method needs it.
+        if any(self._eto_method_requires_elevation(method) for method in methods):
+            self._add_elevation_column(data_temp)
+
+        for method in methods:
+            output_column = f'eto_{method}'
+            if method == 'pm':
+                data_temp.add_column_based_on_function(
+                    output_column,
+                    lambda row: Lib.eto_penman_monteith_daily(row),
+                )
+            elif method == 'hs':
+                data_temp.add_column_based_on_function(
+                    output_column,
+                    lambda row, c=c_hs, a=a_hs, b=b_hs: Lib.eto_hargreaves_samani(row, c=c, a=a, b=b),
+                )
+            elif method == 'pt':
+                data_temp.add_column_based_on_function(
+                    output_column,
+                    lambda row, alpha=alpha_pt: Lib.eto_priestley_taylor_daily(row, alpha),
+                )
+            elif method == 'sd':
+                data_temp.add_column_based_on_function(output_column, Lib.eto_schendel)
+            elif method == 'ab':
+                data_temp.add_column_based_on_function(
+                    output_column,
+                    lambda row, k1=k1_ab: Lib.eto_abtew(row, k1=k1),
+                )
+            elif method == 'tu':
+                data_temp.add_column_based_on_function(output_column, Lib.eto_turc)
+            elif method == 'mk':
+                data_temp.add_column_based_on_function(output_column, Lib.eto_makkink)
+
+            if method in {'pm', 'hs', 'pt', 'mk', 'ab'}:
+                if method != 'ab':
+                    data_temp.transform_column(output_column, lambda o: o if o > 0 else 0)
+                data_temp.transform_column(output_column, lambda o: round(o, nbr_decimal_places))
+
+        self.eto_output_data.set_dataframe(data_temp.get_dataframe())
+        return self.eto_output_data.get_dataframe()
+
+    def eto_estimation_daily_batch(
+        self,
+        input_folder,
+        output_folder,
+        ta_max_column_name='ta_max',
+        ta_min_column_name='ta_min',
+        ta_mean_column_name='ta_mean',
+        rh_max_column_name='rh_max',
+        rh_min_column_name='rh_min',
+        rh_mean_column_name='rh_mean',
+        ws_mean_column_name='ws_mean',
+        rs_mean_column_name='rs_mean',
+        methods_list=None,
+        nbr_decimal_places=2,
+        c_hs=0.0023,
+        a_hs=17.8,
+        b_hs=0.5,
+        k1_ab=0.53,
+        alpha_pt=1.26,
+        prefix=None,
+        datetime_format='%Y-%m-%d %H:%M:%S',
+    ):
+        """
+        Batch daily ET0 estimation for all supported files in input_folder.
+
+        Uses the same per-file processing pattern as impute_batch():
+        load file -> eto_estimation_daily() -> export with the original extension.
+
+        Args:
+            input_folder (str): Folder containing daily weather files.
+            output_folder (str): Destination folder for ET0 output files.
+            ta_max_column_name, ta_min_column_name, ta_mean_column_name,
+            rh_max_column_name, rh_min_column_name, rh_mean_column_name,
+            ws_mean_column_name, rs_mean_column_name: Column aliases passed to eto_estimation_daily().
+            methods_list (list[str] or str or None): ET0 model(s). Each method becomes one column
+                in the same output file (e.g. eto_pm, eto_hs). Defaults to ['pm'].
+            nbr_decimal_places (int): Rounding precision for ET0 outputs.
+            c_hs, a_hs, b_hs, k1_ab, alpha_pt: Model coefficients.
+            prefix (str or None): If provided, process only files that start with prefix.
+            datetime_format (str): Datetime parsing format for per-file initialization.
+
+        Returns:
+            list: Output file paths generated.
+
+        Notes:
+            - Output files keep the same filename/extension as the source files.
+            - GeoParquet/parquet sources with CRS are exported as GeoParquet with the same CRS.
+            - Exported content comes from eto_output_data (including datetime).
+        """
+        if not os.path.isdir(input_folder):
+            raise ValueError(f"input_folder does not exist: {input_folder}")
+
+        self.check_directory_existance(output_folder)
+
+        supported_exts = {'.csv', '.xls', '.xlsx', '.json', '.parquet', '.geoparquet', '.pq', '.pqt'}
+        files = []
+        for name in os.listdir(input_folder):
+            path = os.path.join(input_folder, name)
+            if not os.path.isfile(path):
+                continue
+            if prefix is not None and not name.startswith(prefix):
+                continue
+            if os.path.splitext(name)[1].lower() not in supported_exts:
+                continue
+            files.append(name)
+
+        files = sorted(files)
+        if len(files) == 0:
+            LOGGER.warning(
+                "No input files found for eto_estimation_daily_batch in %s with prefix=%s",
+                input_folder,
+                prefix,
+            )
+            return []
+
+        LOGGER.info(
+            "Starting batch daily ET0: %d file(s), methods_list=%s, prefix=%s",
+            len(files),
+            methods_list if methods_list is not None else ['pm'],
+            prefix,
+        )
+
+        output_paths = []
+        file_iter = tqdm(files, total=len(files), desc="Batch daily ET0", unit="file")
+        for filename in file_iter:
+            file_iter.set_postfix_str(filename)
+            input_path = os.path.join(input_folder, filename)
+            output_path = os.path.join(output_folder, filename)
+
+            input_df = self._load_dataframe_from_path(input_path)
+            datetime_column_candidates = [self.datetime_column_name, 'datetime', 'date', 'time', 'timestamp']
+            detected_datetime_column = None
+            for candidate in datetime_column_candidates:
+                if candidate in input_df.columns:
+                    detected_datetime_column = candidate
+                    break
+            if detected_datetime_column is None:
+                detected_datetime_column = next(
+                    (col for col in input_df.columns if pd.api.types.is_datetime64_any_dtype(input_df[col])),
+                    None,
+                )
+            if detected_datetime_column is None:
+                raise ValueError(
+                    f"Could not infer a datetime column for batch daily ET0 from file: {input_path}"
+                )
+
+            source_crs = getattr(input_df, 'crs', None)
+            if source_crs is None and hasattr(input_df, 'attrs'):
+                source_crs = input_df.attrs.get('crs')
+
+            estimator = self.__class__(
+                data_path=input_df,
+                datetime_column_name=detected_datetime_column,
+                datetime_format=datetime_format,
+                backend=self.backend,
+                lat=self.lat,
+                lon=self.lon,
+                tz_offset=self.tz_offset,
+                elevation=self.elevation,
+                artifact_folder=self.artifact_folder,
+                frequency=self.frequency or 'd',
+            )
+            if source_crs is not None:
+                estimator._source_crs = source_crs
+
+            estimator.eto_estimation_daily(
+                ta_max_column_name=ta_max_column_name,
+                ta_min_column_name=ta_min_column_name,
+                ta_mean_column_name=ta_mean_column_name,
+                rh_max_column_name=rh_max_column_name,
+                rh_min_column_name=rh_min_column_name,
+                rh_mean_column_name=rh_mean_column_name,
+                ws_mean_column_name=ws_mean_column_name,
+                rs_mean_column_name=rs_mean_column_name,
+                methods_list=methods_list,
+                nbr_decimal_places=nbr_decimal_places,
+                c_hs=c_hs,
+                a_hs=a_hs,
+                b_hs=b_hs,
+                k1_ab=k1_ab,
+                alpha_pt=alpha_pt,
+            )
+
+            export_df = estimator.eto_output_data.get_dataframe().copy()
+            if detected_datetime_column not in export_df.columns:
+                if estimator.datetime_column_name in export_df.columns:
+                    export_df = export_df.rename(
+                        columns={estimator.datetime_column_name: detected_datetime_column}
+                    )
+                else:
+                    export_df[detected_datetime_column] = pd.to_datetime(export_df.index)
+                    ordered = [detected_datetime_column] + [
+                        col for col in export_df.columns if col != detected_datetime_column
+                    ]
+                    export_df = export_df[ordered]
+            estimator.eto_output_data.set_dataframe(export_df)
+
+            extension = os.path.splitext(filename)[1].lower()
+            source_crs = getattr(estimator, '_source_crs', source_crs)
+            if extension in ('.parquet', '.geoparquet', '.pq', '.pqt') and (
+                source_crs is not None or extension == '.geoparquet'
+            ):
+                # Export eto_output_data as GeoParquet with the original CRS.
+                original_df = estimator.data.get_dataframe()
+                estimator.data.set_dataframe(export_df)
+                try:
+                    estimator.to_geo_dataframe(output_path, crs=source_crs)
+                finally:
+                    estimator.data.set_dataframe(original_df)
+            else:
+                # Keep same tabular extension as the source file.
+                self._save_dataframe_to_path(export_df, output_path)
+
+            output_paths.append(output_path)
+            LOGGER.info("Daily ET0 file saved: %s", output_path)
+
+        LOGGER.info("Batch daily ET0 completed: %d output file(s)", len(output_paths))
+        return output_paths
     
     def apply_quality_control_criteria(self, variable_column_name, decision_func=lambda x:x>0):
         """
@@ -3467,60 +4252,206 @@ class ClimateFiller():
         print(f"Exported file: {os.path.abspath(path_link)}")
         return result
         
+    def _resolve_era5_land_sample_geometry(
+        self,
+        lon,
+        lat,
+        variables,
+        reference_start=None,
+        reference_end=None,
+        max_search_m=150000,
+        scale=11132,
+    ):
+        """
+        Build an EE point for ERA5-Land extraction.
+
+        If the requested lon/lat falls on a masked/ocean pixel, snap to the nearest
+        valid land pixel within max_search_m.
+        """
+        if isinstance(variables, str):
+            variables = [variables]
+        variables = list(variables)
+        if len(variables) == 0:
+            raise ValueError("variables must be a non-empty list for ERA5-Land sampling.")
+
+        requested_point = ee.Geometry.Point([float(lon), float(lat)])
+
+        if reference_start is None:
+            start_str = '2016-06-01'
+        elif isinstance(reference_start, datetime.datetime):
+            start_str = reference_start.strftime('%Y-%m-%d')
+        else:
+            start_str = str(reference_start)[:10]
+
+        if reference_end is None:
+            end_dt = datetime.datetime.strptime(start_str, '%Y-%m-%d') + timedelta(days=1)
+            end_str = end_dt.strftime('%Y-%m-%d')
+        elif isinstance(reference_end, datetime.datetime):
+            end_str = reference_end.strftime('%Y-%m-%d')
+        else:
+            end_str = str(reference_end)[:10]
+
+        probe = (
+            ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY')
+            .filterDate(start_str, end_str)
+            .select(variables)
+            .first()
+        )
+        if probe is None:
+            raise RuntimeError(
+                f"Could not load an ERA5-Land probe image for {start_str} to {end_str}."
+            )
+
+        direct = probe.reduceRegion(
+            reducer=ee.Reducer.first(),
+            geometry=requested_point,
+            scale=scale,
+            bestEffort=True,
+            maxPixels=10**6,
+        )
+
+        first_band = variables[0]
+        direct_dict = direct.getInfo() or {}
+        direct_value = direct_dict.get(first_band, direct_dict.get('first'))
+
+        if direct_value is not None:
+            print(f"ERA5-Land sampling at requested point ({lon}, {lat}).")
+            return requested_point
+
+        search_region = requested_point.buffer(max_search_m)
+        samples = probe.sample(
+            region=search_region,
+            scale=scale,
+            geometries=True,
+            dropNulls=True,
+            tileScale=4,
+        )
+        sample_size = samples.size().getInfo()
+        if sample_size == 0:
+            raise RuntimeError(
+                f"ERA5-Land has no valid land pixel near ({lon}, {lat}) "
+                f"within {max_search_m} m for variables={variables}."
+            )
+
+        nearest = (
+            samples
+            .map(lambda feature: feature.set(
+                '__dist_m',
+                feature.geometry().distance(requested_point, maxError=100),
+            ))
+            .sort('__dist_m')
+            .first()
+        )
+        nearest_info = nearest.getInfo()
+        coords = nearest_info.get('geometry', {}).get('coordinates')
+        dist_m = nearest_info.get('properties', {}).get('__dist_m')
+        if not coords or len(coords) < 2:
+            raise RuntimeError(
+                f"Failed to resolve nearest ERA5-Land land pixel near ({lon}, {lat})."
+            )
+
+        snapped_lon, snapped_lat = float(coords[0]), float(coords[1])
+        dist_txt = f"{float(dist_m):.0f} m" if dist_m is not None else "unknown distance"
+        print(
+            f"ERA5-Land point ({lon}, {lat}) has no land pixel; "
+            f"using nearest valid land pixel ({snapped_lon}, {snapped_lat}) [{dist_txt}]."
+        )
+        LOGGER.info(
+            "ERA5-Land snapped sample point from (%s, %s) to (%s, %s)",
+            lon,
+            lat,
+            snapped_lon,
+            snapped_lat,
+        )
+        return ee.Geometry.Point([snapped_lon, snapped_lat])
+
     def download_era5_land_data_by_years(self, variables, start_date, end_date):
         self.check_directory_existance('data')
         self.check_directory_existance('data/cache')
-        point = ee.Geometry.Point(self.lon, self.lat)
-        era5_land = ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY').filterBounds(point)
-        
+
         if isinstance(start_date, str) and isinstance(end_date, str):
             # Convert the start date and end date to datetime objects
             start_date = datetime.datetime.strptime(start_date, '%Y-%m-%d')
             end_date = datetime.datetime.strptime(end_date, '%Y-%m-%d')
-        
-        frequency = self._infer_frequency_label_from_index(self.data.get_dataframe().index)
 
-        for year in range(start_date.year, end_date.year + 1):
-            cache_path = self._build_era5_year_cache_path(variables, self.lon, self.lat, year, frequency=frequency)
-            
+        frequency = self._infer_frequency_label_from_index(self.data.get_dataframe().index)
+        years = list(range(start_date.year, end_date.year + 1))
+        year_cache_paths = {
+            year: self._build_era5_year_cache_path(variables, self.lon, self.lat, year, frequency=frequency)
+            for year in years
+        }
+        for cache_path in year_cache_paths.values():
+            self._invalidate_era5_cache_if_invalid(cache_path)
+
+        years_to_download = [year for year, path in year_cache_paths.items() if not os.path.exists(path)]
+        sample_point = None
+        if years_to_download:
+            sample_point = self._resolve_era5_land_sample_geometry(
+                self.lon,
+                self.lat,
+                variables,
+                reference_start=start_date,
+                reference_end=start_date + timedelta(days=1),
+            )
+            era5_land = ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY').filterBounds(sample_point)
+
+        for year in years:
+            cache_path = year_cache_paths[year]
             if os.path.exists(cache_path):
                 print(f"Time series already downloaded on: {cache_path}")
-            else:
-                # Filter the ERA5 land dataset by the year's date range
-                era5_land_filtered = era5_land \
-                    .filterDate(str(year) + '-01-01', str(year + 1) + '-01-01') \
-                    .select(variables)
+                continue
 
-                # Download or perform further processing for the data for each year
-                # Convert the image collection to a feature collection
-                feature_collection = era5_land_filtered.map(lambda image: image.reduceRegions(reducer=ee.Reducer.first(), collection=ee.FeatureCollection(point)))
+            # Filter the ERA5 land dataset by the year's date range
+            era5_land_filtered = era5_land \
+                .filterDate(str(year) + '-01-01', str(year + 1) + '-01-01') \
+                .select(variables)
 
-                # Flatten the feature collection
-                flattened_collection = feature_collection.flatten()
-
-                task = ee.batch.Export.table.toDrive( 
-                    collection=flattened_collection,
-                    description='ERA5_Land_Data',
-                    fileFormat='CSV',
-                    folder = 'era5_land_data'
+            # Convert the image collection to a feature collection at the (possibly snapped) land point.
+            feature_collection = era5_land_filtered.map(
+                lambda image: image.reduceRegions(
+                    reducer=ee.Reducer.first(),
+                    collection=ee.FeatureCollection(sample_point),
                 )
-                task.start()
-                
-                # Export the TS to Loccal from Google Drive
-                geemap.ee_export_vector(flattened_collection , filename=cache_path)
-                temp_data = DataFrame(cache_path)
-                temp_data.rename_columns({'system:index': 'datetime'})
-                temp_data.column_to_date('datetime', extraction_func=self.extract_datetime)
-                temp_data.export(cache_path, index=True)
+            )
+
+            # Flatten the feature collection
+            flattened_collection = feature_collection.flatten()
+
+            task = ee.batch.Export.table.toDrive(
+                collection=flattened_collection,
+                description='ERA5_Land_Data',
+                fileFormat='CSV',
+                folder='era5_land_data',
+            )
+            task.start()
+
+            # Export the TS locally from Google Drive / EE
+            geemap.ee_export_vector(flattened_collection, filename=cache_path)
+            temp_data = DataFrame(cache_path)
+            temp_data.rename_columns({'system:index': 'datetime'})
+            temp_data.column_to_date('datetime', extraction_func=self.extract_datetime)
+            temp_data.export(cache_path, index=True)
+            if not self._era5_cache_is_valid(cache_path):
+                raise RuntimeError(
+                    f"ERA5-Land download produced an invalid cache with no value column: {cache_path}. "
+                    f"Available columns: {self._era5_cache_value_columns(cache_path) or list(pd.read_csv(cache_path, nrows=1).columns)}. "
+                    f"Check lon/lat ({self.lon}, {self.lat}) and GEE export for variables={variables}."
+                )
                 
     def download_era5_land_data_by_months(self, variables, lon, lat, start_date, end_date):
-        point = ee.Geometry.Point(lon, lat)
-        era5_land = ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY').filterBounds(point)
-        
         if isinstance(start_date, str) and isinstance(end_date, str):
             # Convert the start date and end date to datetime objects
             start_date = datetime.datetime.strptime(start_date, '%Y-%m-%d')
             end_date = datetime.datetime.strptime(end_date, '%Y-%m-%d')
+
+        point = self._resolve_era5_land_sample_geometry(
+            lon,
+            lat,
+            variables,
+            reference_start=start_date,
+            reference_end=start_date + timedelta(days=1),
+        )
+        era5_land = ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY').filterBounds(point)
         
         for year in range(start_date.year, end_date.year):
             cache_path = 'data/cache/era5_land_' + '_'.join([str(s) for s in variables] + [str(lon), str(lat), str(year)]) + '.csv'
@@ -3638,7 +4569,7 @@ class ClimateFiller():
             if yearly_data.shape[0] == 365 or yearly_data.shape[0] == 366:
                 annual_precip = yearly_data['p'].sum()
                 annual_temp = yearly_data['ta'].mean()
-                annual_pet = yearly_data['et0_pm'].sum()
+                annual_pet = yearly_data['eto_pm'].sum()
                 
                 tsi = Lib.temperature_seasonality_index(yearly_data['ta'])
                 psi = Lib.precipitation_seasonality_index(yearly_data['p'])
@@ -3677,7 +4608,7 @@ class ClimateFiller():
             'Average Preicipitaton Seasonality Index (PSI)': np.round(avg_psi , 2),
             'Mean Annual Temperature (°C)': np.round(station_data.groupby('year')['ta'].mean().mean(), 2),
             'Total Annual Precipitation (mm)': np.round(station_data.groupby('year')['p'].sum().mean(), 2),
-            'Annual Reference Evapotranspiration (mm)': np.round(station_data.groupby('year')['et0_pm'].sum().mean(), 2),
+            'Annual Reference Evapotranspiration (mm)': np.round(station_data.groupby('year')['eto_pm'].sum().mean(), 2),
         })
 
         print(results)

@@ -44,7 +44,7 @@ class Lib:
         pass
     
     @staticmethod
-    def et0_penman_monteith_daily_v3(row):
+    def eto_penman_monteith_daily_v3(row):
         # input variables
         # T = 25.0  # air temperature in degrees Celsius
         # RH = 60.0  # relative humidity in percent
@@ -120,7 +120,7 @@ class Lib:
         return et0
     
     @staticmethod
-    def et0_penman_monteith_daily(row):
+    def eto_penman_monteith_daily(row):
         # input variables
         # T = 25.0  # air temperature in degrees Celsius
         # RH = 60.0  # relative humidity in percent
@@ -196,7 +196,7 @@ class Lib:
         return et0
     
     @staticmethod
-    def et0_penman_monteith_hourly(
+    def eto_penman_monteith_hourly(
         row,
         ta_column_name,
         rs_column_name,
@@ -290,7 +290,7 @@ class Lib:
         return et0
     
     @staticmethod
-    def et0_penman_monteith_daily_v2(
+    def eto_penman_monteith_daily_v2(
         row,
         ):
         # input variables
@@ -644,7 +644,7 @@ class Lib:
         return rn_l
     
     @staticmethod
-    def et0_hargreaves_samani(row, c=0.0023, a=17.8, b=0.5):
+    def eto_hargreaves_samani(row, c=0.0023, a=17.8, b=0.5):
         ta_mean, ta_max, ta_min, lat, doy =  row['ta_mean'], row['ta_max'], row['ta_min'], row['lat'], row['doy']
         
         ra = Lib.extraterrestrial_radiation_daily(lat, doy)
@@ -1021,7 +1021,7 @@ class Lib:
         return omega
     
     @staticmethod
-    def et0_priestley_taylor_daily(row, alpha=1.26):
+    def eto_priestley_taylor_daily(row, alpha=1.26):
         # input variables
         # T = 25.0  # air temperature in degrees Celsius
         # RH = 60.0  # relative humidity in percent
@@ -1092,7 +1092,7 @@ class Lib:
         return epsilon_net
     
     @staticmethod
-    def et0_priestley_taylor_daily_v2(row):
+    def eto_priestley_taylor_daily_v2(row):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -1128,7 +1128,7 @@ class Lib:
         return et0 * 1000
     
     @staticmethod
-    def et0_priestley_taylor_hourly(row, ta_column_name, rs_column_name):
+    def eto_priestley_taylor_hourly(row, ta_column_name, rs_column_name):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -1165,7 +1165,7 @@ class Lib:
         return et0 * 1000
     
     @staticmethod
-    def et0_schendel(row):
+    def eto_schendel(row):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -1188,7 +1188,7 @@ class Lib:
         return et0
     
     @staticmethod
-    def et0_abtew(row, k1=0.53):
+    def eto_abtew(row, k1=0.53):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -1215,7 +1215,7 @@ class Lib:
         return et0
     
     @staticmethod
-    def et0_turc(row):
+    def eto_turc(row):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -1251,7 +1251,7 @@ class Lib:
         return et0
     
     @staticmethod
-    def et0_mahringer(row):
+    def eto_mahringer(row):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -1277,7 +1277,7 @@ class Lib:
         return et0
     
     @staticmethod
-    def et0_makkink(row, c1=0.61, c2=0.12):
+    def eto_makkink(row, c1=0.61, c2=0.12):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 

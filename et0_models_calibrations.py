@@ -18,12 +18,12 @@ def custom_sum(values):
     else:
         return values.sum()
 
-def et0_hargreaves_samani(x, C, a, b):
+def eto_hargreaves_samani(x, C, a, b):
     return C * (x[0] + a) * (((x[1] - x[2]) ** b) * 0.408 * x[3])
 
 
 
-def et0_makkink(x, c1, c2):
+def eto_makkink(x, c1, c2):
     """
     Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -54,7 +54,7 @@ def et0_makkink(x, c1, c2):
     return et0
 
 
-def et0_priestley_taylor_daily(x, alpha):
+def eto_priestley_taylor_daily(x, alpha):
     # input variables
     # T = 25.0  # air temperature in degrees Celsius
     # RH = 60.0  # relative humidity in percent
@@ -129,11 +129,11 @@ def objective(trial, data):
     # K1
     #k1 = trial.suggest_float('k1', 0, 10, step=0.0001)
     
-    data.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily(row, alpha))
-    #data.add_column_based_on_function('et0_hs', lambda row: Lib.et0_hargreaves_samani(row, c, a, b))
-    #data.add_column_based_on_function('et0_mk', lambda row: Lib.et0_makkink(row, c1, c2))
-    #data.add_column_based_on_function('et0_ab', lambda row: Lib.et0_abtew(row, k1))
-    rmse = data.similarity_measure('et0_pm', 'et0_pt', 'ts')['RMSE']
+    data.add_column_based_on_function('eto_pt', lambda row: Lib.eto_priestley_taylor_daily(row, alpha))
+    #data.add_column_based_on_function('eto_hs', lambda row: Lib.eto_hargreaves_samani(row, c, a, b))
+    #data.add_column_based_on_function('eto_mk', lambda row: Lib.eto_makkink(row, c1, c2))
+    #data.add_column_based_on_function('eto_ab', lambda row: Lib.eto_abtew(row, k1))
+    rmse = data.similarity_measure('eto_pm', 'eto_pt', 'ts')['RMSE']
     return rmse
 
 def main():
@@ -141,22 +141,22 @@ def main():
     
     
     # Merge the dataframes
-    data_ard = DataFrame(r'data/pinns/armed_full_p_et0_bc.csv')
-    data_chi = DataFrame(r'data/pinns/chichaoua_full_p_et0_bc.csv')
-    data_ouk = DataFrame(r'data/pinns/oukaimeden_full_p_et0_bc.csv')
-    data_r3 = DataFrame(r'data/pinns/r3_full_p_et0_bc.csv')
+    data_ard = DataFrame(r'data/pinns/armed_full_p_eto_bc.csv')
+    data_chi = DataFrame(r'data/pinns/chichaoua_full_p_eto_bc.csv')
+    data_ouk = DataFrame(r'data/pinns/oukaimeden_full_p_eto_bc.csv')
+    data_r3 = DataFrame(r'data/pinns/r3_full_p_eto_bc.csv')
     data_et0 = DataFrame()
     data_et0.set_dataframe(data_ard.dataframe)
     data_et0.append_dataframe(data_chi.dataframe)
     data_et0.append_dataframe(data_ouk.dataframe)
     data_et0.append_dataframe(data_r3.dataframe)
-    data_et0.drop_columns(['datetime', 'ta', 'rs', 'p', 'rh', 'ws', 'et0_pt_bc', 'et0_hs_bc', 'et0_mk_bc', 'et0_ab_bc'])
+    data_et0.drop_columns(['datetime', 'ta', 'rs', 'p', 'rh', 'ws', 'eto_pt_bc', 'eto_hs_bc', 'eto_mk_bc', 'eto_ab_bc'])
     # PT  data requirement
     # ta_max, ta_min, doy, lat, rh_max, rh_min, rs_mean, elevation
-    # ta_mean, ta_max, ta_min, doy, lat, lon, rh_max, rh_min, rh_mean, ws_mean, rs_mean, elevation, et0_pm, ra
-    data_et0.keep_columns(['et0_pm', 'rs_mean', 'elevation', 'ta_max', 'ta_min', 'doy', 'lat', 'rh_max', 'rh_min'])
+    # ta_mean, ta_max, ta_min, doy, lat, lon, rh_max, rh_min, rh_mean, ws_mean, rs_mean, elevation, eto_pm, ra
+    data_et0.keep_columns(['eto_pm', 'rs_mean', 'elevation', 'ta_max', 'ta_min', 'doy', 'lat', 'rh_max', 'rh_min'])
     #data_et0.show()
-    #data_et0.export(r'data/pinns/et0_tetha_impact.csv')
+    #data_et0.export(r'data/pinns/eto_tetha_impact.csv')
     
     # Create a study with CMA-ES sampler and Hyperband pruner
     sampler = CmaEsSampler()
@@ -194,24 +194,24 @@ def main():
     b = study.best_params['b']"""
 
     # Calculate the fitted ET values HS
-    #data.add_column_based_on_function('predictions', lambda row: Lib.et0_hargreaves_samani(row, c=c, a=a, b=b))
+    #data.add_column_based_on_function('predictions', lambda row: Lib.eto_hargreaves_samani(row, c=c, a=a, b=b))
     
     # Calculate the fitted ET values PT
-    data_et0.add_column_based_on_function('predictions', lambda row: Lib.et0_priestley_taylor_daily(row, alpha=alpha))
+    data_et0.add_column_based_on_function('predictions', lambda row: Lib.eto_priestley_taylor_daily(row, alpha=alpha))
     
     # Calculate the fitted ET values MK
-    #data.add_column_based_on_function('predictions', lambda row: Lib.et0_abtew(row, k1))
+    #data.add_column_based_on_function('predictions', lambda row: Lib.eto_abtew(row, k1))
     
     # Calculate the fitted ET values AB
     
     
-    print('Comparison: ', data_et0.similarity_measure('et0_pm', 'predictions', 'ts'))
+    print('Comparison: ', data_et0.similarity_measure('eto_pm', 'predictions', 'ts'))
     # Plot the observed vs fitted values
-    """plt.scatter(data.get_column('et0_pm'), data.get_column('predictions'))
+    """plt.scatter(data.get_column('eto_pm'), data.get_column('predictions'))
     plt.xlabel('Observed ET')
     plt.ylabel('Fitted ET')
     plt.title('Observed vs Fitted ET')
-    plt.plot([min(data.get_column('et0_pm')), max(data.get_column('et0_pm'))], [min(data.get_column('et0_pm')), max(data.get_column('et0_pm'))], 'r--')
+    plt.plot([min(data.get_column('eto_pm')), max(data.get_column('eto_pm'))], [min(data.get_column('eto_pm')), max(data.get_column('eto_pm'))], 'r--')
     plt.show()"""
 
     

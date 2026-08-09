@@ -483,7 +483,7 @@ class ClimateFiller():
         self.data.get_column(column).plot()
         plt.show()
     
-    def et0_estimation(self, 
+    def eto_estimation(self, 
                        air_temperture_column_name='ta',
                        global_solar_radiation_column_name='rs',
                        air_relative_humidity_column_name='rh',
@@ -495,29 +495,29 @@ class ClimateFiller():
                        in_place=True
                        ):
         
-        et0_data = DataFrame()
-        et0_data.add_column('ta_mean', self.data.resample_timeseries(in_place=False)[air_temperture_column_name])
-        et0_data.add_column('ta_max', self.data.resample_timeseries(in_place=False, agg='max')[air_temperture_column_name])
-        et0_data.add_column('ta_min', self.data.resample_timeseries(in_place=False, agg='min')[air_temperture_column_name], )
-        et0_data.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[air_relative_humidity_column_name])
-        et0_data.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[air_relative_humidity_column_name])
-        et0_data.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[air_relative_humidity_column_name])
-        et0_data.add_column('u2_mean', self.data.resample_timeseries(in_place=False)[wind_speed_column_name])
-        et0_data.add_column('rg_mean', self.data.resample_timeseries(in_place=False)[global_solar_radiation_column_name])
-        et0_data.index_to_column()
-        et0_data.add_doy_column('date_time')
-        et0_data.add_one_value_column('elevation',(latitude, longitude))
-        et0_data.add_one_value_column('lat', latitude)
+        eto_data = DataFrame()
+        eto_data.add_column('ta_mean', self.data.resample_timeseries(in_place=False)[air_temperture_column_name])
+        eto_data.add_column('ta_max', self.data.resample_timeseries(in_place=False, agg='max')[air_temperture_column_name])
+        eto_data.add_column('ta_min', self.data.resample_timeseries(in_place=False, agg='min')[air_temperture_column_name], )
+        eto_data.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[air_relative_humidity_column_name])
+        eto_data.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[air_relative_humidity_column_name])
+        eto_data.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[air_relative_humidity_column_name])
+        eto_data.add_column('u2_mean', self.data.resample_timeseries(in_place=False)[wind_speed_column_name])
+        eto_data.add_column('rg_mean', self.data.resample_timeseries(in_place=False)[global_solar_radiation_column_name])
+        eto_data.index_to_column()
+        eto_data.add_doy_column('date_time')
+        eto_data.add_one_value_column('elevation',(latitude, longitude))
+        eto_data.add_one_value_column('lat', latitude)
         
         if method == 'pm':
-            et0_data.add_column_based_on_function('et0_pm', Lib.et0_penman_monteith)
+            eto_data.add_column_based_on_function('eto_pm', Lib.eto_penman_monteith)
         elif method == 'hargreaves':
-            et0_data.add_column_based_on_function('et0_hargreaves', Lib.et0_hargreaves)
+            eto_data.add_column_based_on_function('eto_hargreaves', Lib.eto_hargreaves)
             
         if in_place == True:
-            self.data = et0_data
+            self.data = eto_data
             
-        return et0_data.get_dataframe()
+        return eto_data.get_dataframe()
     
     def apply_quality_control_criteria(self, variable_column_name, decision_func=lambda x:x>0):
         self.data.add_column('decision', self.data.get_column(variable_column_name).apply(decision_func))

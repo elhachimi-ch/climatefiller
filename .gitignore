@@ -11,7 +11,7 @@ __pycache__/
 *kitchen*
 **/build
 **/source
-kitchen_et0_calculation.py
+kitchen_eto_calculation.py
 medgu_barcelone_data_processing.py
 medgu_barcelone_ml_beat_hs_magnus.ipynb
 .env

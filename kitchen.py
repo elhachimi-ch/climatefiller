@@ -18,12 +18,12 @@ def custom_sum(values):
     else:
         return values.sum()
 
-def et0_hargreaves_samani(x, C, a, b):
+def eto_hargreaves_samani(x, C, a, b):
     return C * (x[0] + a) * (((x[1] - x[2]) ** b) * 0.408 * x[3])
 
 
 
-def et0_makkink(x, c1, c2):
+def eto_makkink(x, c1, c2):
     """
     Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -54,7 +54,7 @@ def et0_makkink(x, c1, c2):
     return et0
 
 
-def et0_priestley_taylor_daily(x, alpha):
+def eto_priestley_taylor_daily(x, alpha):
     # input variables
     # T = 25.0  # air temperature in degrees Celsius
     # RH = 60.0  # relative humidity in percent
@@ -130,25 +130,26 @@ def objective(trial, data):
     k1 = trial.suggest_float('k1', 0, 10, step=0.0001)
     
     
-    #data.add_column_based_on_function('et0_pt', lambda row: Lib.et0_priestley_taylor_daily(row, alpha))
-    #data.add_column_based_on_function('et0_hs', lambda row: Lib.et0_hargreaves_samani(row, c, a, b))
-    #data.add_column_based_on_function('et0_mk', lambda row: Lib.et0_makkink(row, c1, c2))
-    data.add_column_based_on_function('et0_ab', lambda row: Lib.et0_abtew(row, k1))
-    rmse = data.similarity_measure('et0_pm', 'et0_ab', 'ts')['RMSE']
+    #data.add_column_based_on_function('eto_pt', lambda row: Lib.eto_priestley_taylor_daily(row, alpha))
+    #data.add_column_based_on_function('eto_hs', lambda row: Lib.eto_hargreaves_samani(row, c, a, b))
+    #data.add_column_based_on_function('eto_mk', lambda row: Lib.eto_makkink(row, c1, c2))
+    data.add_column_based_on_function('eto_ab', lambda row: Lib.eto_abtew(row, k1))
+    rmse = data.similarity_measure('eto_pm', 'eto_ab', 'ts')['RMSE']
     return rmse
 
 def main():
     ti = time.time()
     
-    #data = DataFrame("data/oukaimeden_full_p_et0_bc.csv")
+    #data = DataFrame("data/oukaimeden_full_p_eto_bc.csv")
     
-    data_path = r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\climate_noaa_hourly_h_CONGO_644600-99999_2016-01-01_2016-12-31.parquet"
+    data_path = r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\imputed\climate_noaa_hourly_h_BOTSWANA_680320-99999_2016-01-01_2016-12-31.parquet"
     cf = ClimateFiller(
         data_path,
         datetime_column_name='date',
         lon='lon',
         lat='lat',
         frequency='d',
+        elevation='alt',
         )
     #cf = ClimateFiller(r"C:\Users\elhac\OneDrive\Desktop\kitchen\projects\pythonsnippets\data\california\cimis_data.csv")
     
@@ -157,24 +158,37 @@ def main():
    
     # cf.missing_data_checking(['t2m_min', 't2m_max', 'rh_min', 'rh_max', 'ws_mean', 'ws_max', 'ws_min'])
     
-    # cf.impute(
-    #     ['rh_min'],
-    #     # ['t2m_min', 't2m_max', 'rh_min', 'rh_max', 'ws_mean', 'ws_max', 'ws_min', 'rs'],
-    #     # train_ratio=0.8,
-    #     # machine_learning_enabled=True,
-    #     # export_dataset=True,
-    #     # model_name="xgboost"
+    cf.eto_estimation_daily(
+        ta_max_column_name='t2m_max',
+        ta_min_column_name='t2m_min',
+        rh_max_column_name='rh_max',
+        rh_min_column_name='rh_min',
+        ws_mean_column_name='ws_mean',
+        rs_mean_column_name='rs',
+        methods_list=['pm', 'hs'],
+    )
+    
+    cf.eto_output_data.export()
+    
+    
+    # cf.eto_estimation(
+    #     ta_max_column_name='t2m_max',
+    #     ta_min_column_name='t2m_min',
+    #     rh_max_column_name='rh_max',
+    #     rh_min_column_name='rh_min',
+    #     ws_mean_column_name='ws_mean',
+    #     rs_column_name='rs',
+    #     output_column_name='eto',
     # )
     
-    # cf.export()
     # cf.missing_data_checking(['t2m_min', 't2m_max', 'rh_min', 'rh_max', 'ws_mean', 'ws_max', 'ws_min', 'rs'])
     
     
-    cf.impute_batch(
-        input_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations",
-        output_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\imputed",
-        column_to_fill_list=['t2m_min', 't2m_max', 'rh_min', 'rh_max', 'ws_mean', 'ws_max', 'ws_min'],
-    )
+    # cf.impute_batch(
+    #     input_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations",
+    #     output_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\imputed",
+    #     column_to_fill_list=['t2m_min', 't2m_max', 'rh_min', 'rh_max', 'ws_mean', 'rs'],
+    # )
     
     # cf.export(
     #     path_link=r"data\full.parquet",
