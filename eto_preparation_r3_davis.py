@@ -16,7 +16,7 @@ def main():
     climate_filler.data.drop_column('eto_pm')
     climate_filler.eto_estimation()
     data_eto_pm = DataFrame(climate_filler.eto_output_data.dataframe, 'df')
-    climate_filler.eto_estimation(method='hs',)
+    climate_filler.eto_estimation(methods_list=['hs'],)
     eto_hs = climate_filler.eto_output_data.dataframe['eto_hs']
     
     climate_filler.extraterrestrial_radiation_daily()

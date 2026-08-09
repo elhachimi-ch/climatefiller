@@ -64,6 +64,18 @@ class _StubDataFrame:
         self.dataframe[column_name] = values
         return self
 
+    def resample_timeseries(self, in_place=False, agg='mean', freq='D'):
+        if agg == 'max':
+            out = self.dataframe.resample(freq).max()
+        elif agg == 'min':
+            out = self.dataframe.resample(freq).min()
+        else:
+            out = self.dataframe.resample(freq).mean()
+        if in_place:
+            self.dataframe = out
+            return self.dataframe
+        return out
+
     def add_column_based_on_function(self, column_name, func):
         self.dataframe[column_name] = self.dataframe.apply(func, axis=1)
         return self
@@ -851,6 +863,52 @@ def test_eto_estimation_daily_batch_writes_outputs_with_datetime(tmp_path, monke
     assert 'date' in written.columns
 
 
+def test_eto_estimation_multiple_methods_add_columns(monkeypatch):
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    hourly_df = pd.DataFrame(
+        {
+            'date': pd.date_range('2020-01-01', periods=24, freq='h'),
+            'ta': [20.0] * 24,
+            'rh': [60.0] * 24,
+            'ws': [2.0] * 24,
+            'rs': [10.0] * 24,
+        }
+    )
+    cf = ClimateFiller(
+        hourly_df,
+        datetime_column_name='date',
+        backend='local',
+        lat=31.65,
+        lon=-7.6,
+        elevation=500,
+        frequency='h',
+    )
+
+    monkeypatch.setattr(
+        'climatefiller.Lib.eto_penman_monteith_daily',
+        lambda row: 4.2,
+    )
+    monkeypatch.setattr(
+        'climatefiller.Lib.eto_hargreaves_samani',
+        lambda row, c=0.0023, a=17.8, b=0.5: 3.1,
+    )
+
+    result = cf.eto_estimation(
+        ta_column_name='ta',
+        rh_column_name='rh',
+        ws_column_name='ws',
+        rs_column_name='rs',
+        methods_list=['pm', 'hs'],
+        freq='d',
+    )
+
+    assert 'eto_pm' in result.columns
+    assert 'eto_hs' in result.columns
+    assert list(result['eto_pm']) == [4.2]
+    assert list(result['eto_hs']) == [3.1]
+
+
 def test_eto_estimation_batch_writes_outputs_with_datetime(tmp_path, monkeypatch):
     os.environ.setdefault('GEE_PROJECT', 'dummy')
 
@@ -899,7 +957,7 @@ def test_eto_estimation_batch_writes_outputs_with_datetime(tmp_path, monkeypatch
         rh_column_name='rh',
         ws_column_name='ws',
         rs_column_name='rs',
-        method='pm',
+        methods_list=['pm'],
         freq='d',
         prefix='sample',
     )

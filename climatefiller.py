@@ -39,7 +39,7 @@ class ClimateFiller():
     """The ClimateFiller class
     """
 
-    # ET0 models that require elevation in row inputs.
+    # ETo models that require elevation in row inputs.
     ELEVATION_REQUIRED_ETO_METHODS = frozenset({'pm', 'pt', 'mk'})
     
     def __init__(self, data_path=None, datetime_column_name='datetime', 
@@ -153,7 +153,7 @@ class ClimateFiller():
                     f"Elevation column '{self.elevation}' was not found. "
                     f"Available columns: {list(dataframe.columns)}"
                 )
-            # Keep the column name; values are resolved when ET0 methods need elevation.
+            # Keep the column name; values are resolved when ETo methods need elevation.
         elif self.elevation is not None and not isinstance(self.elevation, (int, float, np.number)):
             raise TypeError(
                 "elevation must be a number (meters), a column name string, or None. "
@@ -196,7 +196,7 @@ class ClimateFiller():
 
     def _add_elevation_column(self, target):
         """
-        Attach elevation to an ET0 working dataframe.
+        Attach elevation to an ETo working dataframe.
 
         - number: constant elevation value
         - string: elevation column from in-situ data
@@ -244,7 +244,7 @@ class ClimateFiller():
 
     def _ensure_elevation_for_eto_method(self, method, target):
         """
-        For ET0 models that need elevation, attach it to target using:
+        For ETo models that need elevation, attach it to target using:
         number -> constant value, column name -> dataset column, None -> Lib.get_elevation.
         """
         if self._eto_method_requires_elevation(method):
@@ -3009,7 +3009,7 @@ class ClimateFiller():
                        rs_column_name='rs',
                        rh_column_name='rh',
                        ws_column_name='ws',
-                       method='pm',
+                       methods_list=None,
                        freq='d',
                        reference_crop='grass',
                        nbr_decimal_places=2,
@@ -3020,34 +3020,49 @@ class ClimateFiller():
                        alpha_pt=1.26,
                        ):
         """
-        Estimates reference evapotranspiration (ET0) using the specified meteorological data and method.
+        Estimates reference evapotranspiration (ETo) using the specified meteorological data and method(s).
 
         Args:
-            self (object): The instance of the class.
-            air_temperature_column_name (str): The name of the column that contains air temperature data. Defaults to 'ta'.
-            global_solar_radiation_column_name (str): The name of the column that contains global solar radiation data. Defaults to 'rs'.
-            air_relative_humidity_column_name (str): The name of the column that contains air relative humidity data. Defaults to 'rh'.
-            wind_speed_column_name (str): The name of the column that contains wind speed data. Defaults to 'ws'.
-            date_time_column_name (str): The name of the column that contains date and time information. Defaults to 'date_time'.
-            latitude (float): The latitude coordinate of the location for ET0 estimation. Defaults to 31.65410805.
-            longitude (float): The longitude coordinate of the location for ET0 estimation. Defaults to -7.603140831.
-            method (str): The method to use for ET0 estimation. Currently supported methods include:
-                - 'pm': Penman-Monteith method, which is based on the FAO56 Penman-Monteith equation. Defaults to 'pm'.
-            in_place (bool): Whether to replace the original ET0 column in the dataset or create a new column. Defaults to True.
+            ta_column_name (str): Air temperature column. Defaults to 'ta'.
+            rs_column_name (str): Solar radiation column. Defaults to 'rs'.
+            rh_column_name (str): Relative humidity column. Defaults to 'rh'.
+            ws_column_name (str): Wind speed column. Defaults to 'ws'.
+            methods_list (list[str] or str or None): ETo model(s) to estimate. Each method adds one
+                output column (e.g. 'eto_pm', 'eto_hs') to eto_output_data. Defaults to ['pm'].
+                Supported: 'pm', 'hs', 'pt', 'sd', 'ab', 'tu', 'mk'.
+            freq (str): Estimation frequency, 'd' (daily, with resampling) or 'h' (hourly).
+            reference_crop (str): Reference crop for hourly PM/PT methods.
+            nbr_decimal_places (int): Rounding precision for ETo outputs.
+            c_hs, a_hs, b_hs: Hargreaves-Samani coefficients.
+            k1_ab: Abtew coefficient.
+            alpha_pt: Priestley-Taylor coefficient.
 
         Returns:
-            None
-
-        Notes:
-            - ET0 estimation is a measure of the potential evapotranspiration from a reference crop.
-            - The method utilizes meteorological data such as air temperature, global solar radiation, air relative humidity, and wind speed.
-            - The specified columns in the dataset will be used for ET0 estimation.
-            - The latitude and longitude coordinates define the location for ET0 estimation.
-            - The chosen method will be applied to calculate ET0 values.
-            - If in_place is True, the original ET0 column will be replaced; otherwise, a new column will be created.
+            pandas.DataFrame: Dataframe with ETo column(s) and supporting columns.
         """
-        
-        
+        if methods_list is None:
+            methods_list = ['pm']
+        elif isinstance(methods_list, str):
+            methods_list = [methods_list]
+        elif not isinstance(methods_list, (list, tuple, set)):
+            raise TypeError(
+                "methods_list must be a list/tuple/set of method names, a single method string, or None. "
+                f"Got type {type(methods_list).__name__}."
+            )
+
+        supported_methods = {'pm', 'hs', 'pt', 'sd', 'ab', 'tu', 'mk'}
+        methods = []
+        for raw_method in methods_list:
+            method = str(raw_method).lower().strip()
+            if method not in supported_methods:
+                raise ValueError(
+                    f"Unsupported ETo method '{raw_method}'. Supported methods: {sorted(supported_methods)}"
+                )
+            if method not in methods:
+                methods.append(method)
+        if len(methods) == 0:
+            raise ValueError("methods_list must contain at least one ETo method.")
+
         data_temp = DataFrame() 
         
         if freq == 'd':
@@ -3061,61 +3076,63 @@ class ClimateFiller():
             data_temp.add_one_value_column('lon', self.lon)
             data_temp.reindex_dataframe(self.datetime_column_name)
 
-            # Any model needing elevation: number / column name / None -> Lib.get_elevation
-            self._ensure_elevation_for_eto_method(method, data_temp)
-            
-            if method == 'pm':
-                data_temp.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[rh_column_name])
-                data_temp.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[rh_column_name])
-                data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
-                data_temp.add_column('ws_mean', self.data.resample_timeseries(in_place=False)[ws_column_name])
-                data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
-                
-                data_temp.add_column_based_on_function('eto_pm', lambda row: Lib.eto_penman_monteith_daily(row))
-                data_temp.transform_column('eto_pm', lambda o: o if o > 0 else 0)
-                data_temp.transform_column('eto_pm', lambda o: round(o, nbr_decimal_places))
-            
-            elif method == 'hs':
-                data_temp.add_column_based_on_function('eto_hs', lambda row: Lib.eto_hargreaves_samani(
-                    row,
-                    c=c_hs,
-                    a=a_hs,
-                    b=b_hs))
-                data_temp.transform_column('eto_hs', lambda o: o if o > 0 else 0)
-                data_temp.transform_column('eto_hs', lambda o: round(o, nbr_decimal_places))
+            if any(self._eto_method_requires_elevation(method) for method in methods):
+                self._add_elevation_column(data_temp)
 
-            elif method == 'pt':
+            needs_rh_max = any(m in {'pm', 'pt'} for m in methods)
+            needs_rh_min = any(m in {'pm', 'pt'} for m in methods)
+            needs_rh_mean = any(m in {'pm', 'pt', 'sd', 'tu'} for m in methods)
+            needs_ws_mean = any(m == 'pm' for m in methods)
+            needs_rs_mean = any(m in {'pm', 'pt', 'ab', 'tu', 'mk'} for m in methods)
+
+            if needs_rh_max:
                 data_temp.add_column('rh_max', self.data.resample_timeseries(in_place=False, agg='max')[rh_column_name])
+            if needs_rh_min:
                 data_temp.add_column('rh_min', self.data.resample_timeseries(in_place=False, agg='min')[rh_column_name])
+            if needs_rh_mean:
                 data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
+            if needs_ws_mean:
+                data_temp.add_column('ws_mean', self.data.resample_timeseries(in_place=False)[ws_column_name])
+            if needs_rs_mean:
                 data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
-                
-                data_temp.add_one_value_column('lat', self.lat)
-                
-                data_temp.add_column_based_on_function('eto_pt', lambda row: Lib.eto_priestley_taylor_daily(row, alpha_pt))
-                data_temp.transform_column('eto_pt', lambda o: o if o > 0 else 0)
-                data_temp.transform_column('eto_pt', lambda o: round(o, nbr_decimal_places))
-                
-                
-            elif method == 'sd':
-                data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
-                data_temp.add_column_based_on_function('eto_sd', Lib.eto_schendel)
-                
-            elif method == 'ab':
-                data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
-                data_temp.add_column_based_on_function('eto_ab', lambda row: Lib.eto_abtew(row, k1=k1_ab))
-                data_temp.transform_column('eto_ab', lambda o: round(o, nbr_decimal_places))
-                
-            elif method == 'tu':
-                data_temp.add_column('rh_mean', self.data.resample_timeseries(in_place=False)[rh_column_name])
-                data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
-                data_temp.add_column_based_on_function('eto_tu', Lib.eto_turc)
-           
-            elif method == 'mk':
-                data_temp.add_column('rs_mean', self.data.resample_timeseries(in_place=False)[rs_column_name])
-                data_temp.add_column_based_on_function('eto_mk', Lib.eto_makkink)
-                data_temp.transform_column('eto_mk', lambda o: o if o > 0 else 0)
-                data_temp.transform_column('eto_mk', lambda o: round(o, nbr_decimal_places))
+
+            for method in methods:
+                output_column = f'eto_{method}'
+                if method == 'pm':
+                    data_temp.add_column_based_on_function(
+                        output_column,
+                        lambda row: Lib.eto_penman_monteith_daily(row),
+                    )
+                    data_temp.transform_column(output_column, lambda o: o if o > 0 else 0)
+                    data_temp.transform_column(output_column, lambda o: round(o, nbr_decimal_places))
+                elif method == 'hs':
+                    data_temp.add_column_based_on_function(
+                        output_column,
+                        lambda row, c=c_hs, a=a_hs, b=b_hs: Lib.eto_hargreaves_samani(row, c=c, a=a, b=b),
+                    )
+                    data_temp.transform_column(output_column, lambda o: o if o > 0 else 0)
+                    data_temp.transform_column(output_column, lambda o: round(o, nbr_decimal_places))
+                elif method == 'pt':
+                    data_temp.add_column_based_on_function(
+                        output_column,
+                        lambda row, alpha=alpha_pt: Lib.eto_priestley_taylor_daily(row, alpha),
+                    )
+                    data_temp.transform_column(output_column, lambda o: o if o > 0 else 0)
+                    data_temp.transform_column(output_column, lambda o: round(o, nbr_decimal_places))
+                elif method == 'sd':
+                    data_temp.add_column_based_on_function(output_column, Lib.eto_schendel)
+                elif method == 'ab':
+                    data_temp.add_column_based_on_function(
+                        output_column,
+                        lambda row, k1=k1_ab: Lib.eto_abtew(row, k1=k1),
+                    )
+                    data_temp.transform_column(output_column, lambda o: round(o, nbr_decimal_places))
+                elif method == 'tu':
+                    data_temp.add_column_based_on_function(output_column, Lib.eto_turc)
+                elif method == 'mk':
+                    data_temp.add_column_based_on_function(output_column, Lib.eto_makkink)
+                    data_temp.transform_column(output_column, lambda o: o if o > 0 else 0)
+                    data_temp.transform_column(output_column, lambda o: round(o, nbr_decimal_places))
             
             self.eto_output_data.set_dataframe(data_temp.get_dataframe())
                 
@@ -3128,42 +3145,60 @@ class ClimateFiller():
             self.eto_output_data.transform_column('hod', lambda o: o + 1)
             self.eto_output_data.reindex_dataframe(self.datetime_column_name)
             
-            # Any model needing elevation: number / column name / None -> Lib.get_elevation
-            self._ensure_elevation_for_eto_method(method, self.eto_output_data)
+            if any(self._eto_method_requires_elevation(method) for method in methods):
+                self._add_elevation_column(self.eto_output_data)
                 
             self.eto_output_data.add_one_value_column('lat', self.lat)
             self.eto_output_data.add_one_value_column('lon', self.lon)
-            
-            
-            if method == 'pm':
-                self.eto_output_data.add_column_based_on_function('eto_pm', lambda row: Lib.eto_penman_monteith_hourly(
-                    row, 
-                    ta_column_name,
-                    rs_column_name,
-                    rh_column_name,
-                    ws_column_name,
-                    self.tz_offset,
-                    reference_crop
-                    ))
-                self.eto_output_data.transform_column('eto_pm', lambda o: o if o > 0 else 0)
-                self.eto_output_data.transform_column('eto_pm', lambda o: round(o, 2))
-                
-            
-            elif method == 'pt':
-                self.eto_output_data.add_column_based_on_function('eto_pt', lambda row: Lib.eto_priestley_taylor(
-                    row, 
-                    ta_column_name,
-                    rs_column_name,
-                    rh_column_name,
-                    reference_crop))
-                self.eto_output_data.transform_column('eto_pt', lambda o: o if o > 0 else 0)
-                
-            elif method == 'ab':
-                self.eto_output_data.add_column_based_on_function('eto_ab', lambda row: Lib.eto_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
-            elif method == 'tu':
-                self.eto_output_data.add_column_based_on_function('eto_tu', lambda row: Lib.eto_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
-            elif method == 'sd':
-                self.eto_output_data.add_column_based_on_function('eto_sd', lambda row: Lib.eto_priestley_taylor_hourly(row, ta_column_name, rs_column_name))
+
+            for method in methods:
+                output_column = f'eto_{method}'
+                if method == 'pm':
+                    self.eto_output_data.add_column_based_on_function(
+                        output_column,
+                        lambda row: Lib.eto_penman_monteith_hourly(
+                            row,
+                            ta_column_name,
+                            rs_column_name,
+                            rh_column_name,
+                            ws_column_name,
+                            self.tz_offset,
+                            reference_crop,
+                        ),
+                    )
+                    self.eto_output_data.transform_column(output_column, lambda o: o if o > 0 else 0)
+                    self.eto_output_data.transform_column(output_column, lambda o: round(o, 2))
+                elif method == 'pt':
+                    self.eto_output_data.add_column_based_on_function(
+                        output_column,
+                        lambda row: Lib.eto_priestley_taylor(
+                            row,
+                            ta_column_name,
+                            rs_column_name,
+                            rh_column_name,
+                            reference_crop,
+                        ),
+                    )
+                    self.eto_output_data.transform_column(output_column, lambda o: o if o > 0 else 0)
+                elif method == 'ab':
+                    self.eto_output_data.add_column_based_on_function(
+                        output_column,
+                        lambda row: Lib.eto_priestley_taylor_hourly(row, ta_column_name, rs_column_name),
+                    )
+                elif method == 'tu':
+                    self.eto_output_data.add_column_based_on_function(
+                        output_column,
+                        lambda row: Lib.eto_priestley_taylor_hourly(row, ta_column_name, rs_column_name),
+                    )
+                elif method == 'sd':
+                    self.eto_output_data.add_column_based_on_function(
+                        output_column,
+                        lambda row: Lib.eto_priestley_taylor_hourly(row, ta_column_name, rs_column_name),
+                    )
+                elif method in {'hs', 'mk'}:
+                    raise ValueError(
+                        f"ETo method '{method}' is not supported for hourly (freq='h') estimation."
+                    )
 
             
         return self.eto_output_data.get_dataframe()
@@ -3176,7 +3211,7 @@ class ClimateFiller():
         rs_column_name='rs',
         rh_column_name='rh',
         ws_column_name='ws',
-        method='pm',
+        methods_list=None,
         freq='d',
         reference_crop='grass',
         nbr_decimal_places=2,
@@ -3189,20 +3224,21 @@ class ClimateFiller():
         datetime_format='%Y-%m-%d %H:%M:%S',
     ):
         """
-        Batch ET0 estimation for all supported files in input_folder.
+        Batch ETo estimation for all supported files in input_folder.
 
         Uses the same per-file processing pattern as impute_batch() / eto_estimation_daily_batch():
         load file -> eto_estimation() -> export with the original extension.
 
         Args:
             input_folder (str): Folder containing weather files.
-            output_folder (str): Destination folder for ET0 output files.
+            output_folder (str): Destination folder for ETo output files.
             ta_column_name, rs_column_name, rh_column_name, ws_column_name:
                 Column aliases passed to eto_estimation().
-            method (str): ET0 model. Supported: 'pm', 'hs', 'pt', 'sd', 'ab', 'tu', 'mk'.
+            methods_list (list[str] or str or None): ETo model(s). Each method becomes one column
+                in the same output file (e.g. eto_pm, eto_hs). Defaults to ['pm'].
             freq (str): Estimation frequency passed to eto_estimation(), e.g. 'd' or 'h'.
             reference_crop (str): Reference crop for hourly PM/PT methods.
-            nbr_decimal_places (int): Rounding precision for ET0 outputs.
+            nbr_decimal_places (int): Rounding precision for ETo outputs.
             c_hs, a_hs, b_hs, k1_ab, alpha_pt: Model coefficients.
             prefix (str or None): If provided, process only files that start with prefix.
             datetime_format (str): Datetime parsing format for per-file initialization.
@@ -3242,15 +3278,15 @@ class ClimateFiller():
             return []
 
         LOGGER.info(
-            "Starting batch ET0: %d file(s), method=%s, freq=%s, prefix=%s",
+            "Starting batch ETo: %d file(s), methods_list=%s, freq=%s, prefix=%s",
             len(files),
-            method,
+            methods_list if methods_list is not None else ['pm'],
             freq,
             prefix,
         )
 
         output_paths = []
-        file_iter = tqdm(files, total=len(files), desc="Batch ET0", unit="file")
+        file_iter = tqdm(files, total=len(files), desc="Batch ETo", unit="file")
         for filename in file_iter:
             file_iter.set_postfix_str(filename)
             input_path = os.path.join(input_folder, filename)
@@ -3270,7 +3306,7 @@ class ClimateFiller():
                 )
             if detected_datetime_column is None:
                 raise ValueError(
-                    f"Could not infer a datetime column for batch ET0 from file: {input_path}"
+                    f"Could not infer a datetime column for batch ETo from file: {input_path}"
                 )
 
             source_crs = getattr(input_df, 'crs', None)
@@ -3297,7 +3333,7 @@ class ClimateFiller():
                 rs_column_name=rs_column_name,
                 rh_column_name=rh_column_name,
                 ws_column_name=ws_column_name,
-                method=method,
+                methods_list=methods_list,
                 freq=freq,
                 reference_crop=reference_crop,
                 nbr_decimal_places=nbr_decimal_places,
@@ -3339,9 +3375,9 @@ class ClimateFiller():
                 self._save_dataframe_to_path(export_df, output_path)
 
             output_paths.append(output_path)
-            LOGGER.info("ET0 file saved: %s", output_path)
+            LOGGER.info("ETo file saved: %s", output_path)
 
-        LOGGER.info("Batch ET0 completed: %d output file(s)", len(output_paths))
+        LOGGER.info("Batch ETo completed: %d output file(s)", len(output_paths))
         return output_paths
 
     def eto_estimation_daily(
@@ -3363,10 +3399,10 @@ class ClimateFiller():
         alpha_pt=1.26,
     ):
         """
-        Estimate daily reference evapotranspiration (ET0) from an already-daily weather dataset.
+        Estimate daily reference evapotranspiration (ETo) from an already-daily weather dataset.
 
         Unlike eto_estimation(), this method does not resample. It expects pre-aggregated
-        daily columns and maps them to the internal names required by each ET0 model.
+        daily columns and maps them to the internal names required by each ETo model.
 
         Args:
             ta_max_column_name (str): Daily maximum air temperature column. Defaults to 'ta_max'.
@@ -3378,16 +3414,16 @@ class ClimateFiller():
             rh_mean_column_name (str): Daily mean relative humidity column. Defaults to 'rh_mean'.
             ws_mean_column_name (str): Daily mean wind speed column. Defaults to 'ws_mean'.
             rs_mean_column_name (str): Daily mean solar radiation column. Defaults to 'rs_mean'.
-            methods_list (list[str] or str or None): ET0 model(s) to estimate. Each method adds one
+            methods_list (list[str] or str or None): ETo model(s) to estimate. Each method adds one
                 output column (e.g. 'eto_pm', 'eto_hs') to eto_output_data. Defaults to ['pm'].
                 Supported: 'pm', 'hs', 'pt', 'sd', 'ab', 'tu', 'mk'.
-            nbr_decimal_places (int): Rounding precision for ET0 outputs. Defaults to 2.
+            nbr_decimal_places (int): Rounding precision for ETo outputs. Defaults to 2.
             c_hs, a_hs, b_hs: Hargreaves-Samani coefficients.
             k1_ab: Abtew coefficient.
             alpha_pt: Priestley-Taylor coefficient.
 
         Returns:
-            pandas.DataFrame: Daily dataframe with ET0 column(s) and supporting columns.
+            pandas.DataFrame: Daily dataframe with ETo column(s) and supporting columns.
 
         Notes:
             Required daily variables by method:
@@ -3415,16 +3451,16 @@ class ClimateFiller():
             method = str(raw_method).lower().strip()
             if method not in supported_methods:
                 raise ValueError(
-                    f"Unsupported ET0 method '{raw_method}'. Supported methods: {sorted(supported_methods)}"
+                    f"Unsupported ETo method '{raw_method}'. Supported methods: {sorted(supported_methods)}"
                 )
             if method not in methods:
                 methods.append(method)
         if len(methods) == 0:
-            raise ValueError("methods_list must contain at least one ET0 method.")
+            raise ValueError("methods_list must contain at least one ETo method.")
 
         source_df = self.data.get_dataframe()
         if source_df is None or len(source_df) == 0:
-            raise ValueError("No in-situ data available for daily ET0 estimation.")
+            raise ValueError("No in-situ data available for daily ETo estimation.")
 
         available_columns = set(source_df.columns)
         column_aliases = {
@@ -3556,20 +3592,20 @@ class ClimateFiller():
         datetime_format='%Y-%m-%d %H:%M:%S',
     ):
         """
-        Batch daily ET0 estimation for all supported files in input_folder.
+        Batch daily ETo estimation for all supported files in input_folder.
 
         Uses the same per-file processing pattern as impute_batch():
         load file -> eto_estimation_daily() -> export with the original extension.
 
         Args:
             input_folder (str): Folder containing daily weather files.
-            output_folder (str): Destination folder for ET0 output files.
+            output_folder (str): Destination folder for ETo output files.
             ta_max_column_name, ta_min_column_name, ta_mean_column_name,
             rh_max_column_name, rh_min_column_name, rh_mean_column_name,
             ws_mean_column_name, rs_mean_column_name: Column aliases passed to eto_estimation_daily().
-            methods_list (list[str] or str or None): ET0 model(s). Each method becomes one column
+            methods_list (list[str] or str or None): ETo model(s). Each method becomes one column
                 in the same output file (e.g. eto_pm, eto_hs). Defaults to ['pm'].
-            nbr_decimal_places (int): Rounding precision for ET0 outputs.
+            nbr_decimal_places (int): Rounding precision for ETo outputs.
             c_hs, a_hs, b_hs, k1_ab, alpha_pt: Model coefficients.
             prefix (str or None): If provided, process only files that start with prefix.
             datetime_format (str): Datetime parsing format for per-file initialization.
@@ -3609,14 +3645,14 @@ class ClimateFiller():
             return []
 
         LOGGER.info(
-            "Starting batch daily ET0: %d file(s), methods_list=%s, prefix=%s",
+            "Starting batch daily ETo: %d file(s), methods_list=%s, prefix=%s",
             len(files),
             methods_list if methods_list is not None else ['pm'],
             prefix,
         )
 
         output_paths = []
-        file_iter = tqdm(files, total=len(files), desc="Batch daily ET0", unit="file")
+        file_iter = tqdm(files, total=len(files), desc="Batch daily ETo", unit="file")
         for filename in file_iter:
             file_iter.set_postfix_str(filename)
             input_path = os.path.join(input_folder, filename)
@@ -3636,7 +3672,7 @@ class ClimateFiller():
                 )
             if detected_datetime_column is None:
                 raise ValueError(
-                    f"Could not infer a datetime column for batch daily ET0 from file: {input_path}"
+                    f"Could not infer a datetime column for batch daily ETo from file: {input_path}"
                 )
 
             source_crs = getattr(input_df, 'crs', None)
@@ -3707,9 +3743,9 @@ class ClimateFiller():
                 self._save_dataframe_to_path(export_df, output_path)
 
             output_paths.append(output_path)
-            LOGGER.info("Daily ET0 file saved: %s", output_path)
+            LOGGER.info("Daily ETo file saved: %s", output_path)
 
-        LOGGER.info("Batch daily ET0 completed: %d output file(s)", len(output_paths))
+        LOGGER.info("Batch daily ETo completed: %d output file(s)", len(output_paths))
         return output_paths
     
     def apply_quality_control_criteria(self, variable_column_name, decision_func=lambda x:x>0):
