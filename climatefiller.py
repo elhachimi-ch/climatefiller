@@ -1,4 +1,5 @@
 from data_science_toolkit.model import Model
+from data_science_toolkit.dataframe import DataFrame
 import datetime
 import json
 import logging
@@ -31,234 +32,7 @@ if not LOGGER.handlers:
     logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 
-try:
-    from data_science_toolkit.dataframe import DataFrame as _ToolkitDataFrame
-except ImportError:  # pragma: no cover - fallback for minimal environments
-    class _FallbackDataFrame(pd.DataFrame):
-        def __init__(self, data_path=None, data_type=None, **kwargs):
-            if isinstance(data_path, pd.DataFrame):
-                super().__init__(data_path.copy())
-            elif isinstance(data_path, (str, os.PathLike)):
-                path_str = str(data_path)
-                lower_path = path_str.lower()
-                if lower_path.endswith('.parquet'):
-                    super().__init__(pd.read_parquet(path_str))
-                elif lower_path.endswith('.csv'):
-                    super().__init__(pd.read_csv(path_str))
-                elif lower_path.endswith('.json'):
-                    super().__init__(pd.read_json(path_str))
-                elif lower_path.endswith('.xlsx') or lower_path.endswith('.xls'):
-                    super().__init__(pd.read_excel(path_str))
-                else:
-                    super().__init__()
-            else:
-                super().__init__()
-            self.data_type = data_type or 'df'
-            self.dataset = None
-            self.last_export_path = None
-            self.last_export_data_type = None
-            self.last_export_kwargs = None
 
-        @property
-        def _constructor(self):
-            return _FallbackDataFrame
-
-        def get_dataframe(self):
-            return self
-
-        def set_dataframe(self, dataframe, data_type='df'):
-            if isinstance(dataframe, _FallbackDataFrame):
-                super().__init__(dataframe.copy())
-            elif isinstance(dataframe, pd.DataFrame):
-                super().__init__(dataframe.copy())
-            elif hasattr(dataframe, 'dataframe'):
-                super().__init__(dataframe.dataframe.copy())
-            else:
-                super().__init__(pd.DataFrame(dataframe))
-            self.data_type = data_type
-            return self
-
-        def rename_columns(self, mapping):
-            self.rename(columns=mapping, inplace=True)
-            return self
-
-        def column_to_date(self, column_name, datetime_format='%Y-%m-%d %H:%M:%S', extraction_func=None):
-            if column_name not in self.columns:
-                raise KeyError(column_name)
-            if extraction_func is not None:
-                values = self[column_name].apply(extraction_func)
-            else:
-                raw_values = self[column_name]
-                try:
-                    values = pd.to_datetime(raw_values, format=datetime_format)
-                except (TypeError, ValueError):
-                    try:
-                        values = pd.to_datetime(raw_values, format='ISO8601')
-                    except (TypeError, ValueError):
-                        try:
-                            values = pd.to_datetime(raw_values, utc=True, errors='coerce')
-                        except (TypeError, ValueError):
-                            values = pd.to_datetime(raw_values, errors='coerce')
-            self[column_name] = values
-            self.set_index(column_name, inplace=True)
-            return self
-
-        def reindex_dataframe(self, column_name):
-            if column_name in self.columns:
-                self.set_index(column_name, inplace=True)
-            elif self.index.name != column_name and column_name not in self.index.names:
-                self.index.name = column_name
-            if isinstance(self.index, pd.Index):
-                try:
-                    self.sort_index(inplace=True)
-                    self.index = pd.DatetimeIndex(self.index)
-                except Exception:
-                    pass
-            return self
-
-        def get_columns_names(self):
-            return list(self.columns)
-
-        def get_missing_data_indexes_in_column(self, column_name):
-            return self.index[self[column_name].isna()].tolist()
-
-        def set_row(self, column_name, row_index, value):
-            self.at[row_index, column_name] = value
-            return self
-
-        def export(self, path_link, data_type=None, *args, **kwargs):
-            self.last_export_path = path_link
-            self.last_export_data_type = data_type
-            self.last_export_kwargs = kwargs
-            path_str = str(path_link)
-            lower_path = path_str.lower()
-            if data_type in {'parquet', 'geoparquet', 'pq', 'pqt'} or lower_path.endswith(('.parquet', '.geoparquet', '.pq', '.pqt')):
-                self.to_parquet(path_str, index=kwargs.get('index', False))
-            elif data_type == 'csv' or lower_path.endswith('.csv'):
-                self.to_csv(path_str, index=kwargs.get('index', False))
-            elif data_type == 'json' or lower_path.endswith('.json'):
-                self.to_json(path_str, orient=kwargs.get('orient', 'records'))
-            elif data_type in {'xls', 'xlsx'} or lower_path.endswith(('.xlsx', '.xls')):
-                self.to_excel(path_str, index=kwargs.get('index', False))
-            return self
-
-        def append_dataframe(self, other):
-            return _FallbackDataFrame(pd.concat([self, other.get_dataframe() if hasattr(other, 'get_dataframe') else other], copy=False))
-
-        def join(self, other, how='left'):
-            return _FallbackDataFrame(super().join(other.get_dataframe() if hasattr(other, 'get_dataframe') else other, how=how))
-
-        def is_empty(self):
-            return self.empty
-
-        def drop_column(self, column_name):
-            self.drop(columns=[column_name], inplace=True)
-            return self
-
-        def get_column(self, column_name):
-            return self[column_name]
-
-        def get_columns(self, columns=None):
-            if columns is None:
-                return self
-            return self.loc[:, columns]
-
-        def add_column(self, column_name, values):
-            self[column_name] = values
-            return self
-
-        def add_column_based_on_function(self, column_name, func):
-            self[column_name] = self.apply(func, axis=1)
-            return self
-
-        def add_one_value_column(self, column_name, value):
-            self[column_name] = value
-            return self
-
-        def index_to_column(self, column_name=None):
-            if column_name is None:
-                column_name = self.index.name or 'index'
-            self.reset_index(inplace=True)
-            if column_name in self.columns:
-                self.rename(columns={column_name: column_name}, inplace=True)
-            return self
-
-        def add_doy_column(self, datetime_column_name=None):
-            if datetime_column_name is not None and datetime_column_name in self.columns:
-                self['doy'] = pd.to_datetime(self[datetime_column_name]).dt.dayofyear
-            else:
-                self['doy'] = self.index.dayofyear
-            return self
-
-        def add_year_column(self):
-            if self.index.name is not None:
-                self['year'] = pd.to_datetime(self.index).dt.year
-            else:
-                self['year'] = pd.Series([None] * len(self), index=self.index)
-            return self
-
-        def transform_column(self, column_name, func):
-            self[column_name] = self[column_name].transform(func)
-            return self
-
-        def filter_dataframe(self, column_name, constraint):
-            if column_name in self.columns:
-                return _FallbackDataFrame(self.loc[self[column_name] == constraint])
-            return _FallbackDataFrame(self)
-
-        def keep_columns(self, columns):
-            return _FallbackDataFrame(self.loc[:, columns])
-
-        def get_shape(self):
-            return self.shape
-
-        def get_nan_indexes_of_column(self, column_name):
-            return self.index[self[column_name].isna()].tolist()
-
-        def count_occurence_of_each_row(self, column_name):
-            return self[column_name].value_counts()
-
-        def resample_timeseries(self, frequency='D', agg='mean', in_place=False):
-            if not isinstance(self.index, pd.DatetimeIndex):
-                return self.copy()
-            resampled = self.resample(frequency).agg(agg)
-            if in_place:
-                self._update_inplace(resampled)
-                return self
-            return _FallbackDataFrame(resampled)
-
-    _ToolkitDataFrame = _FallbackDataFrame
-
-
-def _attach_dataframe_compat_methods(frame_cls):
-    if not hasattr(frame_cls, 'get_dataframe'):
-        def get_dataframe(self):
-            return getattr(self, 'dataframe', self)
-        frame_cls.get_dataframe = get_dataframe
-    if not hasattr(frame_cls, 'set_dataframe'):
-        def set_dataframe(self, dataframe, data_type='df'):
-            if hasattr(dataframe, 'get_dataframe'):
-                dataframe = dataframe.get_dataframe()
-            if isinstance(dataframe, pd.DataFrame):
-                self.dataframe = dataframe.copy()
-            else:
-                self.dataframe = pd.DataFrame(dataframe)
-            self.data_type = data_type
-            return self
-        frame_cls.set_dataframe = set_dataframe
-    if not hasattr(frame_cls, 'get_columns_names'):
-        def get_columns_names(self):
-            return list(getattr(self, 'dataframe', self).columns)
-        frame_cls.get_columns_names = get_columns_names
-    if not hasattr(frame_cls, 'rename_columns'):
-        def rename_columns(self, mapping):
-            getattr(self, 'dataframe', self).rename(columns=mapping, inplace=True)
-            return self
-        frame_cls.rename_columns = rename_columns
-    return frame_cls
-
-
-DataFrame = _attach_dataframe_compat_methods(_ToolkitDataFrame)
 
 
 class ClimateFiller():
@@ -268,7 +42,7 @@ class ClimateFiller():
     def __init__(self, data_path=None, datetime_column_name='datetime', 
                  datetime_format='%Y-%m-%d %H:%M:%S', backend='gee', 
                  lat=31.65410805, lon=-7.603140831, tz_offset=-7, elevation=None,
-                 artifact_folder='climatefiller_artifact', **kwargs):
+                 artifact_folder='climatefiller_artifact', frequency='h', **kwargs):
         """
         Initializes an instance of the class with the specified parameters.
 
@@ -300,6 +74,7 @@ class ClimateFiller():
         self.elevation = elevation
         self.backend = backend
         self.artifact_folder = artifact_folder
+        self.frequency = frequency
         self._source_crs = None
         self.check_directory_existance(self.artifact_folder)
         self._ml_impute_config = {
@@ -309,6 +84,7 @@ class ClimateFiller():
             'export_dataset': False,
         }
         self.et0_output_data = DataFrame()
+        self.data = DataFrame()
         if backend == 'gee':
             gee_project = self._get_gee_project_name()
             ee.Initialize(project=gee_project)
@@ -330,6 +106,7 @@ class ClimateFiller():
                 )
             self.data.rename_columns({datetime_column_name:'datetime'})
             datetime_column_name = 'datetime'
+            self._resolve_lon_lat_from_data()
             self._normalize_datetime_column(datetime_column_name, datetime_format)
             self.datetime_column_name = datetime_column_name
         
@@ -339,6 +116,31 @@ class ClimateFiller():
         if hasattr(self.data, 'get_dataframe'):
             return self.data.get_dataframe()
         return self.data
+
+    def _resolve_lon_lat_from_data(self):
+        dataframe = self._get_underlying_dataframe()
+        if dataframe is None:
+            return
+
+        if isinstance(self.lon, str):
+            lon_value = dataframe[self.lon] if self.lon in dataframe.columns else None
+            if lon_value is not None and not lon_value.empty:
+                if pd.api.types.is_numeric_dtype(lon_value):
+                    self.lon = float(lon_value.iloc[0])
+                else:
+                    resolved = pd.to_numeric(lon_value, errors='coerce')
+                    if not resolved.dropna().empty:
+                        self.lon = float(resolved.dropna().iloc[0])
+
+        if isinstance(self.lat, str):
+            lat_value = dataframe[self.lat] if self.lat in dataframe.columns else None
+            if lat_value is not None and not lat_value.empty:
+                if pd.api.types.is_numeric_dtype(lat_value):
+                    self.lat = float(lat_value.iloc[0])
+                else:
+                    resolved = pd.to_numeric(lat_value, errors='coerce')
+                    if not resolved.dropna().empty:
+                        self.lat = float(resolved.dropna().iloc[0])
 
     def _normalize_datetime_column(self, column_name, datetime_format='%Y-%m-%d %H:%M:%S'):
         dataframe = self._get_underlying_dataframe().copy()
@@ -359,14 +161,17 @@ class ClimateFiller():
 
         dataframe[column_name] = values
         dataframe.set_index(column_name, inplace=True)
-        dataframe.sort_index(inplace=True)
+        dataframe.index = self._normalize_datetime_index(dataframe.index, preserve_timezone=True)
+        dataframe = dataframe.sort_index()
+        if dataframe.index.has_duplicates:
+            dataframe = dataframe[~dataframe.index.duplicated(keep='last')]
 
         if hasattr(self.data, 'set_dataframe'):
             self.data.set_dataframe(dataframe)
         elif hasattr(self.data, 'dataframe'):
             self.data.dataframe = dataframe
         else:
-            self.data = dataframe
+            self.data = DataFrame()
 
         return dataframe
 
@@ -392,7 +197,11 @@ class ClimateFiller():
         prepared = dataframe.copy()
         prepared = prepared.rename(columns={source_name: 'datetime'})
         prepared['datetime'] = pd.to_datetime(prepared['datetime'], errors='coerce')
-        prepared = prepared.set_index('datetime').sort_index()
+        prepared = prepared.set_index('datetime')
+        prepared.index = self._normalize_datetime_index(prepared.index, preserve_timezone=True)
+        prepared = prepared.sort_index()
+        if prepared.index.has_duplicates:
+            prepared = prepared[~prepared.index.duplicated(keep='last')]
         return prepared
 
     def __getattr__(self, name):
@@ -524,8 +333,101 @@ class ClimateFiller():
     @staticmethod
     def _as_timestamp(value):
         if isinstance(value, str):
-            return pd.to_datetime(value)
+            value = pd.to_datetime(value)
+        if isinstance(value, pd.Timestamp):
+            if getattr(value, 'tzinfo', None) is not None:
+                return value.tz_convert(None)
+            return value
+        if isinstance(value, pd.DatetimeIndex):
+            return value
         return value
+
+    @staticmethod
+    def _normalize_datetime_index(index, preserve_timezone=True):
+        if index is None:
+            return None
+
+        if isinstance(index, pd.DatetimeIndex):
+            if getattr(index, 'tz', None) is None:
+                return index
+            if not preserve_timezone:
+                try:
+                    return index.tz_convert(None)
+                except Exception:
+                    return index.tz_localize(None)
+            return index
+
+        try:
+            parsed = pd.to_datetime(index, errors='coerce')
+        except Exception:
+            parsed = pd.Index(index)
+
+        if isinstance(parsed, pd.DatetimeIndex):
+            if getattr(parsed, 'tz', None) is None:
+                return parsed
+            if not preserve_timezone:
+                try:
+                    return parsed.tz_convert(None)
+                except Exception:
+                    return parsed.tz_localize(None)
+            return parsed
+
+        values = []
+        found_timezone = None
+        for value in list(parsed):
+            try:
+                parsed_value = pd.to_datetime(value, errors='coerce')
+            except Exception:
+                parsed_value = value
+
+            if isinstance(parsed_value, pd.Timestamp):
+                if getattr(parsed_value, 'tzinfo', None) is not None:
+                    if found_timezone is None:
+                        found_timezone = parsed_value.tzinfo
+                    if preserve_timezone:
+                        values.append(parsed_value)
+                    else:
+                        try:
+                            values.append(parsed_value.tz_convert(None))
+                        except Exception:
+                            values.append(parsed_value.tz_localize(None))
+                else:
+                    if preserve_timezone and found_timezone is not None:
+                        try:
+                            values.append(parsed_value.tz_localize(found_timezone))
+                        except Exception:
+                            values.append(parsed_value)
+                    else:
+                        values.append(parsed_value)
+            else:
+                values.append(parsed_value)
+
+        try:
+            return pd.DatetimeIndex(values)
+        except Exception:
+            return pd.Index(values)
+
+    @staticmethod
+    def _normalize_datetime_value(value):
+        if value is None:
+            return None
+        try:
+            parsed = pd.to_datetime(value, utc=True, errors='coerce')
+        except Exception:
+            try:
+                parsed = pd.to_datetime(value, errors='coerce')
+            except Exception:
+                parsed = pd.Timestamp(value)
+        if isinstance(parsed, pd.Timestamp):
+            if getattr(parsed, 'tzinfo', None) is not None:
+                try:
+                    return parsed.tz_convert(None)
+                except Exception:
+                    return parsed.tz_localize(None)
+            return parsed
+        if isinstance(parsed, pd.DatetimeIndex):
+            return ClimateFiller._normalize_datetime_index(parsed, preserve_timezone=False)
+        return parsed
 
     @staticmethod
     def _build_error_features(index, source_values):
@@ -588,7 +490,7 @@ class ClimateFiller():
 
     def _infer_frequency_label_from_index(self, dt_index):
         if dt_index is None or len(dt_index) < 2:
-            return 'unknown'
+            return self._normalize_frequency_label(self.frequency)
 
         try:
             inferred = pd.infer_freq(pd.DatetimeIndex(dt_index))
@@ -613,7 +515,7 @@ class ClimateFiller():
                 return 'daily'
             return self._normalize_frequency_label(median_delta)
         except Exception:
-            return 'unknown'
+            return self._normalize_frequency_label(self.frequency)
 
     def _align_source_series_to_target_frequency(self, source_series, column_to_fill_name, target_index=None):
         if source_series is None:
@@ -624,7 +526,7 @@ class ClimateFiller():
             return source_series
 
         try:
-            source_series.index = pd.to_datetime(source_series.index)
+            source_series.index = self._normalize_datetime_index(source_series.index, preserve_timezone=False)
         except Exception:
             return source_series
 
@@ -634,7 +536,7 @@ class ClimateFiller():
             target_index = self.data.get_dataframe().index
 
         try:
-            target_index = pd.DatetimeIndex(pd.to_datetime(target_index)).sort_values()
+            target_index = self._normalize_datetime_index(target_index, preserve_timezone=False).sort_values()
         except Exception:
             return source_series
 
@@ -643,6 +545,10 @@ class ClimateFiller():
 
         target_frequency_label = self._infer_frequency_label_from_index(target_index)
         source_frequency_label = self._infer_frequency_label_from_index(source_series.index)
+
+        configured_target_label = self._normalize_frequency_label(self.frequency)
+        if target_frequency_label in {'unknown'} and configured_target_label in {'hourly', 'daily', 'minutely'}:
+            target_frequency_label = configured_target_label
 
         if target_frequency_label == 'daily' and source_frequency_label in {'hourly', 'unknown'}:
             variable_context = self._resolve_imputation_variable_context(column_to_fill_name)
@@ -676,6 +582,24 @@ class ClimateFiller():
             else:
                 aggregation = requested_aggregation if requested_aggregation in {'max', 'min', 'mean'} else 'mean'
                 resampled = source_series.resample('H').agg(aggregation)
+            if len(resampled.index) == 0:
+                return source_series
+            return resampled.reindex(target_index)
+
+        if target_frequency_label == 'hourly' and source_frequency_label in {'hourly', 'unknown'}:
+            variable_context = self._resolve_imputation_variable_context(column_to_fill_name)
+            canonical = variable_context['canonical']
+            requested_aggregation = variable_context['aggregation']
+            radiation_like = canonical in {'rs'}
+            precipitation_like = canonical in {'p'}
+            if radiation_like:
+                daytime_series = source_series.between_time('09:00', '18:00')
+                resampled = daytime_series.resample('h').mean()
+            elif precipitation_like:
+                resampled = source_series.resample('h').agg('sum')
+            else:
+                aggregation = requested_aggregation if requested_aggregation in {'max', 'min', 'mean'} else 'mean'
+                resampled = source_series.resample('h').agg(aggregation)
             if len(resampled.index) == 0:
                 return source_series
             return resampled.reindex(target_index)
@@ -1030,9 +954,19 @@ class ClimateFiller():
                 )
 
         missing_iter = tqdm(missing_indexes, desc=f"Impute {column_to_fill_name}", unit="row")
+        df = self._get_underlying_dataframe()
+        if not isinstance(df, pd.DataFrame):
+            df = pd.DataFrame(df)
+        df.index = self._normalize_datetime_index(df.index)
+        if df.index.has_duplicates:
+            df = df[~df.index.duplicated(keep='last')].sort_index()
+        if column_to_fill_name not in df.columns:
+            df[column_to_fill_name] = np.nan
+
         for p in missing_iter:
             p_ts = self._as_timestamp(p)
-            if p_ts not in source_series.index:
+            normalized_source_index = self._normalize_datetime_index(source_series.index, preserve_timezone=False)
+            if p_ts not in normalized_source_index:
                 continue
 
             source_value = source_series.loc[p_ts]
@@ -1051,18 +985,51 @@ class ClimateFiller():
             except Exception:
                 pass
 
-            df = self.data.get_dataframe()
-            if column_to_fill_name not in df.columns:
-                df[column_to_fill_name] = np.nan
-            try:
-                df.loc[p_ts, column_to_fill_name] = filled_value
-            except Exception:
+            assignment_done = False
+            for candidate in [p_ts, p]:
+                if candidate is None:
+                    continue
                 try:
-                    df.loc[p, column_to_fill_name] = filled_value
+                    if isinstance(candidate, str):
+                        continue
+                    if candidate in df.index:
+                        df.loc[df.index == candidate, column_to_fill_name] = filled_value
+                        assignment_done = True
+                        break
                 except Exception:
+                    continue
+
+            if not assignment_done:
+                try:
                     df[column_to_fill_name] = df[column_to_fill_name].astype(float)
-                    df.loc[df.index == p_ts, column_to_fill_name] = filled_value
-            self.data.set_dataframe(df)
+                    normalized_index = self._normalize_datetime_index(df.index, preserve_timezone=False)
+                    normalized_candidate = self._normalize_datetime_index(pd.Index([p_ts]), preserve_timezone=False)[0]
+                    mask = normalized_index == normalized_candidate
+                    if mask.any():
+                        df.loc[mask, column_to_fill_name] = filled_value
+                        assignment_done = True
+                except Exception:
+                    pass
+
+            if not assignment_done:
+                try:
+                    df.at[p_ts, column_to_fill_name] = filled_value
+                    assignment_done = True
+                except Exception:
+                    pass
+
+            if not assignment_done:
+                try:
+                    df.at[p, column_to_fill_name] = filled_value
+                except Exception:
+                    pass
+
+            if hasattr(self.data, 'set_dataframe'):
+                self.data.set_dataframe(df)
+            elif hasattr(self.data, 'dataframe'):
+                self.data.dataframe = df
+            else:
+                self.data = DataFrame(df)
 
     def _ensure_impute_target_column(self, column_name):
         df = self.data.get_dataframe().copy()
@@ -1326,7 +1293,7 @@ class ClimateFiller():
 
         return output_paths
 
-    def impute_batch(self, input_folder, output_folder, column_to_fill_name='ta', product='era5_land', machine_learning_enabled=False, train_ratio=1, model_name='xgboost', export_dataset=False, prefix=None, datetime_format='%Y-%m-%d %H:%M:%S', **kwargs):
+    def impute_batch(self, input_folder, output_folder, column_to_fill_list='ta', product='era5_land', machine_learning_enabled=False, train_ratio=1, model_name='xgboost', export_dataset=False, prefix=None, datetime_format='%Y-%m-%d %H:%M:%S', **kwargs):
         """
         Batch impute files from input_folder and save the imputed results to output_folder.
 
@@ -1371,7 +1338,7 @@ class ClimateFiller():
         LOGGER.info(
             "Starting batch impute: %d file(s), variable=%s, prefix=%s",
             len(files),
-            column_to_fill_name,
+            column_to_fill_list,
             prefix,
         )
 
@@ -1408,7 +1375,7 @@ class ClimateFiller():
                 artifact_folder=self.artifact_folder,
             )
             imputer.impute(
-                column_to_fill_name=column_to_fill_name,
+                column_to_fill_list=column_to_fill_list,
                 product=product,
                 machine_learning_enabled=machine_learning_enabled,
                 train_ratio=train_ratio,
@@ -1520,9 +1487,21 @@ class ClimateFiller():
         df[lat_column] = pd.to_numeric(df[lat_column], errors='coerce')
         df = df.dropna(subset=[lon_column, lat_column]).copy()
 
+        geometry = gpd.points_from_xy(df[lon_column], df[lat_column], crs=crs)
+        if geometry is None:
+            try:
+                from shapely.geometry import Point
+            except Exception:
+                geometry = None
+            else:
+                geometry = [Point(float(x), float(y)) for x, y in zip(df[lon_column], df[lat_column])]
+
+        if geometry is None:
+            return gpd.GeoDataFrame(df, crs=crs)
+
         return gpd.GeoDataFrame(
             df,
-            geometry=gpd.points_from_xy(df[lon_column], df[lat_column], crs=crs),
+            geometry=geometry,
             crs=crs,
         )
 
@@ -1663,7 +1642,7 @@ class ClimateFiller():
                                                                                  latitude,
                                                                                  longitude))
     
-    def impute(self, column_to_fill_name='ta', 
+    def _impute_single_column(self, column_to_fill_name='ta', 
                               product="era5_land",
                               machine_learning_enabled=False,
                               train_ratio=1,
@@ -1714,7 +1693,8 @@ class ClimateFiller():
         target_frequency = self._infer_frequency_label_from_index(self.data.get_dataframe().index)
 
         missing_count = self.missing_data_checking(target_column_to_fill_name, verbose=False)
-        total_rows = self.data.get_shape()[0]
+        dataframe = self._get_underlying_dataframe()
+        total_rows = dataframe.shape[0]
         missing_percent = round((missing_count / total_rows) * 100, 2) if total_rows > 0 else 0
         print(
             "Missing data statistic for {}: {} missing value(s) out of {} rows ({}%).".format(
@@ -1750,15 +1730,14 @@ class ClimateFiller():
                 indexes = []
                 indexes_source = self.data.get_dataframe().index if machine_learning_enabled else self.data.get_missing_data_indexes_in_column(target_column_to_fill_name)
                 for p in tqdm(indexes_source, desc="Collect timestamps", unit="ts"):
-                    if isinstance(p, str) is True:
-                        indexes.append(datetime.datetime.strptime(p, '%Y-%m-%d %H:%M:%S'))
-                    else:
-                        indexes.append(p)
-                    
+                    normalized_value = self._normalize_datetime_value(p)
+                    if normalized_value is not None:
+                        indexes.append(normalized_value)
+
                 years = set()
                 for p in indexes:
-                    years.add(p.year)     
-                missing_data_dates = {}    
+                    years.add(p.year)
+                missing_data_dates = {}
                 years = list(years)
                 years.sort()
                 range_start = min(indexes)
@@ -2508,9 +2487,42 @@ class ClimateFiller():
                 pass
             
         
-        
-        
-        
+
+    def impute(self, column_to_fill_list='ta',
+                              product="era5_land",
+                              machine_learning_enabled=False,
+                              train_ratio=1,
+                              model_name='xgboost',
+                              export_dataset=False,
+                              **kwargs
+                              ):
+        """
+        Fill missing values for one or more columns in a single call.
+
+        Args:
+            column_to_fill_list (str or list[str]): Column name or list of column names to impute.
+
+        Returns:
+            ClimateFiller: The current instance for chaining.
+        """
+        if isinstance(column_to_fill_list, str):
+            column_names = [column_to_fill_list]
+        else:
+            column_names = list(column_to_fill_list)
+
+        for column_name in column_names:
+            self._impute_single_column(
+                column_name,
+                product=product,
+                machine_learning_enabled=machine_learning_enabled,
+                train_ratio=train_ratio,
+                model_name=model_name,
+                export_dataset=export_dataset,
+                **kwargs,
+            )
+
+        return self
+
     def best_ml_model(self, column_to_fill_name, lon, lat, product, metric='rmse'):
         list_models = [
             LinearRegression(),
@@ -2591,48 +2603,63 @@ class ClimateFiller():
         self.best_model = best_model
         print(f'The Best perfoming model is: {best_model_name} with {metric.upper()}={rmse_scores[best_model_name]}')
     
-    def missing_data_checking(self, column_name=None, verbose=True):
-        """Function Name: missing_data_checking
+    def missing_data_checking(self, column_names_list=None, verbose=True):
+        """Check missing values for one column, many columns, or the full dataframe.
 
-            Description:
-            This function checks for missing data in a column of a dataframe.
+        Args:
+            column_names_list (str | list[str] | None): Column name, list of column names, or None for all columns.
+            verbose (bool): Whether to print a human-readable summary.
 
-            Parameters:
-
-            self: the instance of the class that the function is a part of.
-            column_name: (optional) the name of the column to check for missing data. If not provided, the function will check for missing data in all columns of the dataframe. Default value is None.
-            verbose: (optional) a boolean value that determines whether the function should print a summary of the missing data. Default value is True.
-            Returns:
-            A dictionary that contains the number and percentage of missing values for each column checked.
-
-            Note:
-            This function assumes that the dataframe has already been loaded into the class instance.
+        Returns:
+            int | dict[str, int]: Missing-value count for a single column, or a mapping of
+            column names to missing-value counts for multiple columns or the full dataframe.
         """
-        miss = 0
-        if column_name is not None:
-            if any(pd.isna(self.data.get_dataframe()[column_name])) is True:
-                miss = self.data.get_dataframe()[column_name].isnull().sum()
-                missing_data_percent = round((miss/self.data.get_shape()[0])*100, 2)
-                if verbose is True:
-                    print("{} has {} missing value(s) which represents {}% of dataset size".format(column_name, miss, missing_data_percent))
-            else:
-                if verbose is True:
-                    print("No missed data in column " + column_name)
-        else:
-            miss = []
-            for c in self.data.get_dataframe().columns:
-                miss_by_column = self.data.get_dataframe()[c].isnull().sum()
-                if miss_by_column>0:
-                    missing_data_percent = round((miss_by_column/self.data.get_shape()[0])*100, 2)
-                    if verbose is True:
-                        print("{} has {} missing value(s) which represents {}% of dataset size".format(c, miss_by_column, missing_data_percent))
-                else:
-                    if verbose is True:
-                        print("{} has NO missing value!".format(c))
-                miss.append(miss_by_column)
-        print('Detail of missing values in the dataset: {}'.format(miss))
-        if verbose is False:
-            return miss
+        dataframe = self.data.get_dataframe()
+        total_rows = dataframe.shape[0]
+
+        if column_names_list is None:
+            columns_to_check = list(dataframe.columns)
+            missing_counts = {}
+            for column in columns_to_check:
+                miss_by_column = int(dataframe[column].isnull().sum())
+                missing_counts[column] = miss_by_column
+                if verbose:
+                    if miss_by_column > 0:
+                        missing_data_percent = round((miss_by_column / total_rows) * 100, 2) if total_rows else 0
+                        print("{} has {} missing value(s) which represents {}% of dataset size".format(column, miss_by_column, missing_data_percent))
+                    else:
+                        print("{} has NO missing value!".format(column))
+            if verbose:
+                print('Detail of missing values in the dataset: {}'.format(missing_counts))
+            return missing_counts
+
+        if isinstance(column_names_list, (list, tuple, set)):
+            column_names = list(column_names_list)
+            missing_counts = {}
+            for column in column_names:
+                miss_by_column = int(dataframe[column].isnull().sum())
+                missing_counts[column] = miss_by_column
+                if verbose:
+                    if miss_by_column > 0:
+                        missing_data_percent = round((miss_by_column / total_rows) * 100, 2) if total_rows else 0
+                        print("{} has {} missing value(s) which represents {}% of dataset size".format(column, miss_by_column, missing_data_percent))
+                    else:
+                        print("No missed data in column " + column)
+            if verbose:
+                print('Detail of missing values in the dataset: {}'.format(missing_counts))
+            return missing_counts
+
+        miss = int(dataframe[column_names_list].isnull().sum())
+        if miss > 0:
+            missing_data_percent = round((miss / total_rows) * 100, 2) if total_rows else 0
+            if verbose:
+                print("{} has {} missing value(s) which represents {}% of dataset size".format(column_names_list, miss, missing_data_percent))
+        elif verbose:
+            print("No missed data in column " + column_names_list)
+
+        if verbose:
+            print('Detail of missing values in the dataset: {}'.format(miss))
+        return miss
     
     def eliminate_outliers(self, climate_varibale_column_name='ta', method='lof', n_neighbors=48, contamination=0.005, n_estimators=100):
         """
@@ -3292,7 +3319,7 @@ class ClimateFiller():
                     self.data.add_one_value_column(variable, None)
                     
                     self.fill(variable, lon, lat)
-                    self.data.export(output_file)
+                    self.data.export(output_file, index=True)
             
         elif product == 'merra2':
             
@@ -3349,7 +3376,7 @@ class ClimateFiller():
                 df = pd.DataFrame(result.items(), columns=['datetime', merra2_variable])
                 df['datetime'] = pd.to_datetime(df['datetime'], format='%Y%m%d%H')
                 self.data_reanalysis.set_dataframe(df)
-                self.data_reanalysis.export(output_file)
+                self.data_reanalysis.export(output_file, index=True)
                 print(f'Downloading of {variable} from Merra2 completed.')
         
         # If other data source
@@ -3394,6 +3421,8 @@ class ClimateFiller():
         is_geospatial_output = data_type in {'parquet', 'geoparquet', 'geojson', 'json', 'gpkg', 'shp'} or path_lower.endswith(('.parquet', '.geoparquet', '.pq', '.pqt', '.geojson', '.gpkg', '.shp'))
 
         export_kwargs = dict(kwargs)
+        if 'index' not in export_kwargs and not is_geospatial_output:
+            export_kwargs['index'] = True
         try:
             setattr(self.data, 'last_export_path', path_link)
             setattr(self.data, 'last_export_data_type', data_type)
@@ -3434,7 +3463,7 @@ class ClimateFiller():
             print(f"Exported geospatial file: {os.path.abspath(path_link)}")
             return gdf
 
-        result = self.data.export(path_link, data_type, **kwargs)
+        result = self.data.export(path_link, data_type, **export_kwargs)
         print(f"Exported file: {os.path.abspath(path_link)}")
         return result
         
@@ -3482,7 +3511,7 @@ class ClimateFiller():
                 temp_data = DataFrame(cache_path)
                 temp_data.rename_columns({'system:index': 'datetime'})
                 temp_data.column_to_date('datetime', extraction_func=self.extract_datetime)
-                temp_data.export(cache_path)
+                temp_data.export(cache_path, index=True)
                 
     def download_era5_land_data_by_months(self, variables, lon, lat, start_date, end_date):
         point = ee.Geometry.Point(lon, lat)
@@ -3524,7 +3553,7 @@ class ClimateFiller():
                 temp_data = DataFrame(cache_path)
                 temp_data.rename_columns({'system:index': 'datetime'})
                 temp_data.column_to_date('datetime', extraction_func=self.extract_datetime)
-                temp_data.export(cache_path)
+                temp_data.export(cache_path, index=True)
     
     
     @staticmethod

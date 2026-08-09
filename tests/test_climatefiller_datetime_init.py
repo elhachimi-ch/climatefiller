@@ -108,6 +108,65 @@ else:
 from climatefiller import ClimateFiller
 
 
+def test_explicit_frequency_is_used_for_frequency_inference():
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    cf = ClimateFiller(
+        pd.DataFrame({'date': ['2020-01-01 00:00:00'], 'value': [1.0]}),
+        datetime_column_name='date',
+        backend='local',
+        frequency='d',
+    )
+
+    inferred = cf._infer_frequency_label_from_index(pd.DatetimeIndex([pd.Timestamp('2020-01-01 00:00:00')]))
+
+    assert inferred == 'daily'
+
+
+def test_fill_from_source_series_matches_timezone_normalized_indexes():
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    df = pd.DataFrame({
+        'date': ['2020-01-01 00:00:00', '2020-01-01 01:00:00'],
+        'rh_max': [np.nan, np.nan],
+    })
+    cf = ClimateFiller(df, datetime_column_name='date', backend='local')
+
+    source_series = pd.Series(
+        [10.0, 20.0],
+        index=pd.DatetimeIndex([
+            pd.Timestamp('2020-01-01 00:00:00', tz='UTC'),
+            pd.Timestamp('2020-01-01 01:00:00', tz='UTC'),
+        ]),
+    )
+
+    cf._fill_from_source_series('rh_max', source_series, 'era5_land', machine_learning_enabled=False)
+
+    assert cf.data.get_dataframe()['rh_max'].notna().all()
+
+
+def test_align_source_series_to_target_frequency_aggregates_to_configured_resolution():
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    cf = ClimateFiller(
+        pd.DataFrame({'date': ['2020-01-01 00:00:00', '2020-01-01 01:00:00'], 'rh_max': [np.nan, np.nan]}),
+        datetime_column_name='date',
+        backend='local',
+        frequency='h',
+    )
+
+    source_series = pd.Series(
+        [10.0, 30.0],
+        index=pd.date_range('2020-01-01 00:00:00', periods=2, freq='H'),
+    )
+
+    aligned = cf._align_source_series_to_target_frequency(source_series, 'rh_max', target_index=source_series.index)
+
+    assert aligned.shape[0] == 2
+    assert aligned.iloc[0] == 10.0
+    assert aligned.iloc[1] == 30.0
+
+
 def test_init_with_datetime_column_for_dataframe_and_parquet(tmp_path):
     os.environ.setdefault('GEE_PROJECT', 'dummy')
 
@@ -168,6 +227,22 @@ def test_prepare_datetime_column_infers_non_literal_source_column_names():
     assert prepared.shape[0] == 2
 
 
+def test_constructor_resolves_lon_and_lat_from_dataframe_columns_once():
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    df = pd.DataFrame({
+        'date': ['2020-01-01 00:00:00'],
+        'lon': [12.34],
+        'lat': [56.78],
+        'value': [1.0],
+    })
+
+    cf = ClimateFiller(df, datetime_column_name='date', backend='local', lon='lon', lat='lat')
+
+    assert cf.lon == 12.34
+    assert cf.lat == 56.78
+
+
 def test_daily_column_names_resolve_to_expected_climate_variable_and_aggregation():
     os.environ.setdefault('GEE_PROJECT', 'dummy')
 
@@ -215,6 +290,37 @@ def test_fill_from_source_series_updates_target_column_without_set_row():
     assert cf.data.get_dataframe().loc[daily_index[0], 'rs'] == 10.0
 
 
+def test_normalize_datetime_index_handles_mixed_timezone_and_naive_values():
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    values = [
+        pd.Timestamp('2020-01-01 00:00:00+00:00'),
+        '2020-01-01 01:00:00',
+    ]
+
+    normalized = ClimateFiller._normalize_datetime_index(values, preserve_timezone=False)
+
+    assert len(normalized) == 2
+    assert normalized[0] == pd.Timestamp('2020-01-01 00:00:00')
+    assert normalized[1] == pd.Timestamp('2020-01-01 01:00:00')
+
+
+def test_fill_from_source_series_deduplicates_datetime_index_before_assignment():
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    duplicate_index = pd.to_datetime(['2020-01-01 00:00:00', '2020-01-01 00:00:00', '2020-01-02 00:00:00'])
+    df = pd.DataFrame({'date': duplicate_index, 'ta': [np.nan, np.nan, np.nan]})
+    cf = ClimateFiller(df, datetime_column_name='date', backend='local')
+
+    source_series = pd.Series([10.0, 20.0], index=pd.DatetimeIndex(['2020-01-01 00:00:00', '2020-01-02 00:00:00']))
+    cf._fill_from_source_series('ta', source_series, 'era5_land', machine_learning_enabled=False)
+
+    filled_df = cf.data.get_dataframe()
+    assert filled_df.index.is_unique
+    assert filled_df.shape[0] == 2
+    assert filled_df.loc[pd.Timestamp('2020-01-01 00:00:00'), 'ta'] == 10.0
+
+
 def test_build_geodataframe_uses_source_crs_when_available():
     os.environ.setdefault('GEE_PROJECT', 'dummy')
 
@@ -248,8 +354,112 @@ def test_export_uses_source_crs_when_crs_is_none_for_geospatial_output():
     cf = ClimateFiller(source_df, datetime_column_name='date', backend='local')
 
     gdf = cf.export('data/output.parquet', crs=None)
-
     assert gdf.crs == 'EPSG:32631'
+
+
+def test_export_includes_index_by_default_for_table_outputs():
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    class _RecordingDataFrame:
+        def __init__(self):
+            self.export_calls = []
+            self.last_export_path = None
+            self.last_export_data_type = None
+            self.last_export_kwargs = None
+
+        def get_dataframe(self):
+            return pd.DataFrame({'value': [1.0]})
+
+        def export(self, path_link, data_type=None, **kwargs):
+            self.export_calls.append({'path': path_link, 'data_type': data_type, 'kwargs': kwargs})
+            return self
+
+    cf = ClimateFiller(pd.DataFrame({'date': ['2020-01-01 00:00:00'], 'value': [1.0]}), datetime_column_name='date', backend='local')
+    cf.data = _RecordingDataFrame()
+
+    cf.export('data/output.csv')
+
+    assert cf.data.export_calls[0]['kwargs']['index'] is True
+
+
+def test_impute_single_column_normalizes_mixed_timezone_indexes(monkeypatch):
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    cf = ClimateFiller(
+        pd.DataFrame({
+            'date': ['2020-01-01 00:00:00+00:00', '2020-01-01 01:00:00+00:00'],
+            'rh_max': [np.nan, np.nan],
+        }),
+        datetime_column_name='date',
+        backend='gee',
+    )
+
+    monkeypatch.setattr(cf.data, 'get_missing_data_indexes_in_column', lambda column: [
+        pd.Timestamp('2020-01-01 00:00:00+00:00'),
+        pd.Timestamp('2020-01-01 01:00:00+00:00'),
+    ])
+    monkeypatch.setattr(cf, '_build_source_cache_path', lambda *args, **kwargs: 'dummy.csv')
+    monkeypatch.setattr('climatefiller.os.path.exists', lambda path: True)
+
+    captured = {}
+
+    def fake_load_source_series_cache(path):
+        return pd.Series(
+            [10.0, 20.0],
+            index=pd.DatetimeIndex([
+                pd.Timestamp('2020-01-01 00:00:00'),
+                pd.Timestamp('2020-01-01 01:00:00'),
+            ]),
+        )
+
+    def fake_fill_from_source_series(column, source_series, product, machine_learning_enabled=False):
+        captured['column'] = column
+
+    monkeypatch.setattr(cf, '_load_source_series_cache', fake_load_source_series_cache)
+    monkeypatch.setattr(cf, '_fill_from_source_series', fake_fill_from_source_series)
+
+    cf._impute_single_column('rh_max', product='era5_land')
+
+    assert captured['column'] == 'rh_max'
+
+
+def test_impute_accepts_multiple_columns_and_processes_each(monkeypatch):
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    cf = ClimateFiller(pd.DataFrame({'date': ['2020-01-01 00:00:00'], 'ta': [np.nan], 'rs': [np.nan]}), datetime_column_name='date', backend='local')
+    seen = []
+
+    def fake_impute_single(self, column_to_fill_name, **kwargs):
+        seen.append(column_to_fill_name)
+        self.data.get_dataframe()[column_to_fill_name] = 1.0
+        return self
+
+    monkeypatch.setattr(ClimateFiller, '_impute_single_column', fake_impute_single)
+
+    result = cf.impute(['ta', 'rs'])
+
+    assert seen == ['ta', 'rs']
+    assert result is cf
+    assert cf.data.get_dataframe().loc[pd.Timestamp('2020-01-01 00:00:00'), 'ta'] == 1.0
+    assert cf.data.get_dataframe().loc[pd.Timestamp('2020-01-01 00:00:00'), 'rs'] == 1.0
+
+
+def test_missing_data_checking_accepts_multiple_columns_and_returns_counts():
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    cf = ClimateFiller(
+        pd.DataFrame({
+            'date': ['2020-01-01 00:00:00', '2020-01-02 00:00:00'],
+            'ta': [np.nan, 1.0],
+            'rs': [2.0, np.nan],
+        }),
+        datetime_column_name='date',
+        backend='local',
+    )
+
+    result = cf.missing_data_checking(['ta', 'rs'], verbose=False)
+
+    assert result == {'ta': 1, 'rs': 1}
 
 
 def test_impute_batch_processes_files_and_writes_outputs(tmp_path, monkeypatch):
@@ -270,7 +480,7 @@ def test_impute_batch_processes_files_and_writes_outputs(tmp_path, monkeypatch):
     monkeypatch.setattr(ClimateFiller, 'impute', fake_impute)
 
     cf = ClimateFiller(pd.DataFrame({'date': ['2020-01-01 00:00:00'], 'value': [1.0]}), datetime_column_name='date', backend='local')
-    output_paths = cf.impute_batch(str(input_dir), str(output_dir), column_to_fill_name='rs', prefix='sample')
+    output_paths = cf.impute_batch(str(input_dir), str(output_dir), column_to_fill_list='rs', prefix='sample')
 
     assert len(output_paths) == 1
     written = pd.read_parquet(output_dir / 'sample.parquet')

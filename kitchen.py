@@ -146,37 +146,35 @@ def main():
     cf = ClimateFiller(
         data_path,
         datetime_column_name='date',
-        lon=-1.783,
-        lat=34.817
+        lon='lon',
+        lat='lat',
+        frequency='d',
         )
     #cf = ClimateFiller(r"C:\Users\elhac\OneDrive\Desktop\kitchen\projects\pythonsnippets\data\california\cimis_data.csv")
     
-    # cf.show()
-    # cf.missing_data_checking()
+    # print(cf.data.get_columns_names())
+   
+   
+    # cf.missing_data_checking(['t2m_min', 't2m_max', 'rh_min', 'rh_max', 'ws_mean', 'ws_max', 'ws_min'])
     
-    cf.impute(
-        'rh_max',
-        # train_ratio=0.8,
-        # machine_learning_enabled=True,
-        # export_dataset=True,
-        # model_name="xgboost"
-        
-        
+    # cf.impute(
+    #     ['rh_min'],
+    #     # ['t2m_min', 't2m_max', 'rh_min', 'rh_max', 'ws_mean', 'ws_max', 'ws_min', 'rs'],
+    #     # train_ratio=0.8,
+    #     # machine_learning_enabled=True,
+    #     # export_dataset=True,
+    #     # model_name="xgboost"
+    # )
+    
+    # cf.export()
+    # cf.missing_data_checking(['t2m_min', 't2m_max', 'rh_min', 'rh_max', 'ws_mean', 'ws_max', 'ws_min', 'rs'])
+    
+    
+    cf.impute_batch(
+        input_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations",
+        output_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\imputed",
+        column_to_fill_list=['t2m_min', 't2m_max', 'rh_min', 'rh_max', 'ws_mean', 'ws_max', 'ws_min'],
     )
-    
-    print(cf.data.get_columns_names())
-    
-    # cf.impute_batch(
-    #     input_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations",
-    #     output_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\imputed",
-    #     column_to_fill_name='ta',
-    # )
-    # cf.impute_batch(
-    #         input_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations",
-    #         output_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\imputed",
-    #         column_to_fill_name='ta',
-    # )
-    
     
     # cf.export(
     #     path_link=r"data\full.parquet",

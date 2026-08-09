@@ -381,27 +381,42 @@ class ClimateFiller():
         best_model = next((model for model in list_models if model.__class__.__name__ == best_model_name), None)
         self.best_model = best_model
 
-    def missing_data_checking(self, column_name=None, verbose=True):
-        if column_name is not None:
-            column_data = self.data.get_dataframe()[column_name]
+    def missing_data_checking(self, column_names_list=None, verbose=True):
+        if column_names_list is not None:
+            if isinstance(column_names_list, (list, tuple, set)):
+                missing_counts = {}
+                for column_name in column_names_list:
+                    column_data = self.data.get_dataframe()[column_name]
+                    missing_count = column_data.isnull().sum()
+                    missing_counts[column_name] = int(missing_count)
+                    if verbose:
+                        if missing_count > 0:
+                            missing_percent = round((missing_count / self.data.get_shape()[0]) * 100, 2)
+                            print("{} has {} missing value(s) which represents {}% of the dataset size".format(column_name, missing_count, missing_percent))
+                        else:
+                            print("No missing data in column " + column_name)
+                return missing_counts
+
+            column_data = self.data.get_dataframe()[column_names_list]
             missing_count = column_data.isnull().sum()
             if verbose:
                 if missing_count > 0:
                     missing_percent = round((missing_count / self.data.get_shape()[0]) * 100, 2)
-                    print("{} has {} missing value(s) which represents {}% of the dataset size".format(column_name, missing_count, missing_percent))
+                    print("{} has {} missing value(s) which represents {}% of the dataset size".format(column_names_list, missing_count, missing_percent))
                 else:
-                    print("No missing data in column " + column_name)
-        else:
-            missing_counts = self.data.get_dataframe().isnull().sum()
-            for c, missing_count in missing_counts.items():
-                if verbose:
-                    if missing_count > 0:
-                        missing_percent = round((missing_count / self.data.get_shape()[0]) * 100, 2)
-                        print("{} has {} missing value(s) which represents {}% of the dataset size".format(c, missing_count, missing_percent))
-                    else:
-                        print("{} has NO missing value!".format(c))
-            if not verbose:
-                return missing_counts.tolist()
+                    print("No missing data in column " + column_names_list)
+            return int(missing_count)
+
+        missing_counts = self.data.get_dataframe().isnull().sum()
+        for c, missing_count in missing_counts.items():
+            if verbose:
+                if missing_count > 0:
+                    missing_percent = round((missing_count / self.data.get_shape()[0]) * 100, 2)
+                    print("{} has {} missing value(s) which represents {}% of the dataset size".format(c, missing_count, missing_percent))
+                else:
+                    print("{} has NO missing value!".format(c))
+        if not verbose:
+            return missing_counts.tolist()
 
     def anomaly_detection(self, climate_varibale_column='Air temperature', method='knn', ):
         pass
