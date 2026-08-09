@@ -144,12 +144,12 @@ def main():
     
     data_path = r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\imputed\climate_noaa_hourly_h_BOTSWANA_680320-99999_2016-01-01_2016-12-31.parquet"
     cf = ClimateFiller(
-        data_path,
+        # data_path,
         datetime_column_name='date',
         lon='lon',
         lat='lat',
         frequency='d',
-        elevation='alt',
+        elevation='elevation',
         )
     #cf = ClimateFiller(r"C:\Users\elhac\OneDrive\Desktop\kitchen\projects\pythonsnippets\data\california\cimis_data.csv")
     
@@ -158,17 +158,17 @@ def main():
    
     # cf.missing_data_checking(['t2m_min', 't2m_max', 'rh_min', 'rh_max', 'ws_mean', 'ws_max', 'ws_min'])
     
-    cf.eto_estimation_daily_batch(
-        input_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\imputed",
-        output_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\eto",
-        ta_max_column_name='t2m_max',
-        ta_min_column_name='t2m_min',
-        rh_max_column_name='rh_max',
-        rh_min_column_name='rh_min',
-        ws_mean_column_name='ws_mean',
-        rs_mean_column_name='rs',
-        methods_list=['pm', 'hs', 'mk', 'ab', 'pt'],
-    )
+    # cf.eto_estimation_daily_batch(
+    #     input_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\imputed",
+    #     output_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\eto",
+    #     ta_max_column_name='t2m_max',
+    #     ta_min_column_name='t2m_min',
+    #     rh_max_column_name='rh_max',
+    #     rh_min_column_name='rh_min',
+    #     ws_mean_column_name='ws_mean',
+    #     rs_mean_column_name='rs',
+    #     methods_list=['pm', 'hs', 'mk', 'ab', 'pt'],
+    # )
     
     # cf.eto_estimation_daily(
     #     ta_max_column_name='t2m_max',
@@ -196,11 +196,17 @@ def main():
     # cf.missing_data_checking(['t2m_min', 't2m_max', 'rh_min', 'rh_max', 'ws_mean', 'ws_max', 'ws_min', 'rs'])
     
     
-    # cf.impute_batch(
-    #     input_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations",
-    #     output_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\imputed",
+    # cf.impute(
     #     column_to_fill_list=['t2m_min', 't2m_max', 'rh_min', 'rh_max', 'ws_mean', 'rs'],
+    #     unit_dict={'rs': 'mj/m2/day'},
     # )
+    
+    cf.impute_batch(
+        input_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\no_rs_mean",
+        output_folder=r"C:\Users\regfo\OneDrive - The Hong Kong Polytechnic University\rcaig\papers\africa_et\data\selected_stations\eto_v1",
+        column_to_fill_list=['rs'],
+        unit_dict={'rs': 'mj/m2/day'},
+    )
     
     # cf.export(
     #     path_link=r"data\full.parquet",

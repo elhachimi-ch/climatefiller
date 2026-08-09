@@ -596,6 +596,116 @@ class ClimateFiller():
 
         return ClimateFiller._sanitize_cache_token(freq_token)
 
+    @staticmethod
+    def _normalize_unit_token(unit):
+        if unit is None:
+            return None
+        token = str(unit).strip().lower()
+        if token == '':
+            return None
+        token = (
+            token.replace('²', '2')
+            .replace('^2', '2')
+            .replace('**2', '2')
+            .replace('μ', 'u')
+        )
+        token = re.sub(r'\s+', '', token)
+        token = token.replace('per', '/')
+        token = token.replace('m-2', '/m2').replace('d-1', '/day').replace('day-1', '/day')
+        token = token.replace('·', '/').replace('.', '/')
+        while '//' in token:
+            token = token.replace('//', '/')
+        return token.strip('/')
+
+    @classmethod
+    def _is_mj_m2_day_unit(cls, unit):
+        token = cls._normalize_unit_token(unit)
+        if token is None:
+            return False
+        aliases = {
+            'mj/m2/day',
+            'mj/m2/d',
+            'mjm2day',
+            'mjm2/d',
+            'mjm2/day',
+            'mj/m2day',
+        }
+        compact = token.replace('/', '')
+        return token in aliases or compact in {'mjm2day', 'mjm2d'}
+
+    def _resolve_impute_unit(self, column_name, unit_dict=None):
+        if not unit_dict:
+            unit_dict = getattr(self, '_impute_unit_dict', None)
+        if not unit_dict:
+            return None
+
+        candidates = [column_name, str(column_name).strip(), str(column_name).strip().lower()]
+        try:
+            canonical = self._resolve_imputation_variable_context(column_name)['canonical']
+            candidates.extend([canonical, f'{canonical}_mean', f'{canonical}_max', f'{canonical}_min'])
+        except Exception:
+            pass
+
+        lowered = {str(k).strip().lower(): v for k, v in unit_dict.items()}
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            if candidate in unit_dict:
+                return unit_dict[candidate]
+            key = str(candidate).strip().lower()
+            if key in lowered:
+                return lowered[key]
+        return None
+
+    @staticmethod
+    def _era5_ssrd_accumulated_to_hourly_joules(ssrd_series):
+        """Convert ERA5-Land accumulated SSRD (J/m2) into hourly energy increments (J/m2)."""
+        ssrd_series = pd.Series(ssrd_series).copy()
+        ssrd_series.index = pd.DatetimeIndex(ssrd_series.index)
+        ssrd_series = ssrd_series[~ssrd_series.index.duplicated(keep='first')].sort_index()
+
+        values = []
+        for timestamp in ssrd_series.index:
+            current = float(ssrd_series.loc[timestamp])
+            if pd.isna(current):
+                values.append(np.nan)
+                continue
+            if timestamp.hour == 1:
+                values.append(current)
+            else:
+                previous_timestamp = timestamp - timedelta(hours=1)
+                if previous_timestamp in ssrd_series.index:
+                    previous = float(ssrd_series.loc[previous_timestamp])
+                    if pd.isna(previous):
+                        previous = current
+                else:
+                    previous = current
+                values.append(current - previous)
+        return pd.Series(values, index=ssrd_series.index, dtype=float)
+
+    def _convert_era5_rs_series_for_target_unit(self, ssrd_series, target_unit=None, target_frequency_label=None):
+        """
+        Convert ERA5 SSRD (accumulated J/m2) to the target in-situ radiation unit.
+
+        Default (no unit): hourly irradiance in W/m2 (current approach).
+        If unit is mj/m2/day and target is daily: sum hourly J/m2 and convert to MJ/m2/day.
+        """
+        hourly_joules = self._era5_ssrd_accumulated_to_hourly_joules(ssrd_series)
+
+        if self._is_mj_m2_day_unit(target_unit):
+            hourly_joules = hourly_joules.clip(lower=0)
+            freq_label = self._normalize_frequency_label(
+                target_frequency_label if target_frequency_label is not None else self.frequency
+            )
+            if freq_label == 'daily':
+                daily_joules = hourly_joules.groupby(hourly_joules.index.floor('D')).sum()
+                return daily_joules / 1_000_000.0
+            return hourly_joules / 1_000_000.0
+
+        # Current approach: convert hourly energy to W/m2 and clip unrealistic spikes.
+        wm2 = hourly_joules / 3600.0
+        return wm2.apply(lambda o: o if (pd.isna(o) or abs(o) < 1500) else 0)
+
     def _infer_frequency_label_from_index(self, dt_index):
         if dt_index is None or len(dt_index) < 2:
             return self._normalize_frequency_label(self.frequency)
@@ -625,7 +735,7 @@ class ClimateFiller():
         except Exception:
             return self._normalize_frequency_label(self.frequency)
 
-    def _align_source_series_to_target_frequency(self, source_series, column_to_fill_name, target_index=None):
+    def _align_source_series_to_target_frequency(self, source_series, column_to_fill_name, target_index=None, target_unit=None):
         if source_series is None:
             return source_series
 
@@ -658,13 +768,26 @@ class ClimateFiller():
         if target_frequency_label in {'unknown'} and configured_target_label in {'hourly', 'daily', 'minutely'}:
             target_frequency_label = configured_target_label
 
+        if target_unit is None:
+            target_unit = self._resolve_impute_unit(column_to_fill_name)
+
         if target_frequency_label == 'daily' and source_frequency_label in {'hourly', 'unknown'}:
             variable_context = self._resolve_imputation_variable_context(column_to_fill_name)
             canonical = variable_context['canonical']
             requested_aggregation = variable_context['aggregation']
             radiation_like = canonical in {'rs'}
             precipitation_like = canonical in {'p'}
-            if radiation_like:
+            if radiation_like and self._is_mj_m2_day_unit(target_unit):
+                # Energy totals for MJ/m2/day. Detect whether source is J/m2, W/m2, or already MJ/h.
+                sample_max = float(source_series.abs().max()) if len(source_series.dropna()) else 0.0
+                daily_sum = source_series.resample('D').sum()
+                if sample_max > 1e4:
+                    resampled = daily_sum / 1_000_000.0
+                elif sample_max > 50:
+                    resampled = daily_sum * 3600.0 / 1_000_000.0
+                else:
+                    resampled = daily_sum
+            elif radiation_like:
                 daytime_series = source_series.between_time('09:00', '18:00')
                 resampled = daytime_series.groupby(daytime_series.index.floor('D')).mean()
             elif precipitation_like:
@@ -700,7 +823,10 @@ class ClimateFiller():
             requested_aggregation = variable_context['aggregation']
             radiation_like = canonical in {'rs'}
             precipitation_like = canonical in {'p'}
-            if radiation_like:
+            if radiation_like and self._is_mj_m2_day_unit(target_unit):
+                # Keep hourly energy series as-is when target remains hourly.
+                resampled = source_series.resample('h').sum()
+            elif radiation_like:
                 daytime_series = source_series.between_time('09:00', '18:00')
                 resampled = daytime_series.resample('h').mean()
             elif precipitation_like:
@@ -885,15 +1011,17 @@ class ClimateFiller():
             f"Tried {list(candidate_names)}. Available columns: {columns}"
         )
 
-    def _build_source_cache_path(self, product, variable, lon, lat, start_datetime, end_datetime, frequency=None):
+    def _build_source_cache_path(self, product, variable, lon, lat, start_datetime, end_datetime, frequency=None, unit=None):
         start_ts = pd.to_datetime(start_datetime).strftime('%Y%m%d%H%M%S')
         end_ts = pd.to_datetime(end_datetime).strftime('%Y%m%d%H%M%S')
         lon_key = self._format_coord_for_cache(lon)
         lat_key = self._format_coord_for_cache(lat)
         freq_label = self._normalize_frequency_label(frequency)
+        unit_token = self._normalize_unit_token(unit)
+        unit_part = f"_unit_{self._sanitize_cache_token(unit_token)}" if unit_token else ''
         filename = (
             f"impute_source_backend_{self.backend}_product_{product}_var_{variable}_"
-            f"freq_{freq_label}_lon_{lon_key}_lat_{lat_key}_start_{start_ts}_end_{end_ts}.csv"
+            f"freq_{freq_label}{unit_part}_lon_{lon_key}_lat_{lat_key}_start_{start_ts}_end_{end_ts}.csv"
         )
         return os.path.join('data', 'cache', filename)
 
@@ -1515,7 +1643,7 @@ class ClimateFiller():
         ordered_columns = [out_name] + [col for col in df.columns if col != out_name]
         return df[ordered_columns]
 
-    def impute_batch(self, input_folder, output_folder, column_to_fill_list='ta', product='era5_land', machine_learning_enabled=False, train_ratio=1, model_name='xgboost', export_dataset=False, prefix=None, datetime_format='%Y-%m-%d %H:%M:%S', **kwargs):
+    def impute_batch(self, input_folder, output_folder, column_to_fill_list='ta', product='era5_land', machine_learning_enabled=False, train_ratio=1, model_name='xgboost', export_dataset=False, prefix=None, datetime_format='%Y-%m-%d %H:%M:%S', unit_dict=None, **kwargs):
         """
         Batch impute files from input_folder and save the imputed results to output_folder.
 
@@ -1530,6 +1658,7 @@ class ClimateFiller():
             export_dataset (bool): Whether to export the training dataset artifact.
             prefix (str or None): If provided, process only files that start with prefix.
             datetime_format (str): Datetime parsing format used when initializing per-file instances.
+            unit_dict (dict or None): Optional variable->unit mapping passed to impute().
 
         Returns:
             list: Output file paths generated.
@@ -1607,6 +1736,7 @@ class ClimateFiller():
                 train_ratio=train_ratio,
                 model_name=model_name,
                 export_dataset=export_dataset,
+                unit_dict=unit_dict,
                 **kwargs,
             )
 
@@ -1890,6 +2020,7 @@ class ClimateFiller():
                               train_ratio=1,
                               model_name='xgboost',
                               export_dataset=False,
+                              unit_dict=None,
                               **kwargs
                               ):
         """
@@ -1903,6 +2034,7 @@ class ClimateFiller():
             product (str): The data product to retrieve for filling missing values. Defaults to "era5_Land".
             machine_learning_enabled (bool): Whether to use machine learning techniques for filling missing values. Defaults to False.
             export_dataset (bool): Whether to export the training dataset used for ML error modeling to artifact_folder. Defaults to False.
+            unit_dict (dict or None): Optional variable->unit mapping. Defaults to None.
             backend (str or None): The backend to use for data retrieval. Defaults to None.
 
         Returns:
@@ -1928,11 +2060,16 @@ class ClimateFiller():
         lat = kwargs.pop('lat', self.lat)
         self._ml_impute_config['model_kwargs'] = kwargs
 
+        if unit_dict is None:
+            unit_dict = getattr(self, '_impute_unit_dict', None) or {}
+        self._impute_unit_dict = unit_dict
+
         requested_column_to_fill_name = column_to_fill_name
         variable_context = self._resolve_imputation_variable_context(requested_column_to_fill_name)
         canonical_column_to_fill_name = variable_context['canonical']
         target_column_to_fill_name = self._ensure_impute_target_column(requested_column_to_fill_name)
         target_frequency = self._infer_frequency_label_from_index(self.data.get_dataframe().index)
+        target_unit = self._resolve_impute_unit(target_column_to_fill_name, unit_dict)
 
         missing_count = self.missing_data_checking(target_column_to_fill_name, verbose=False)
         dataframe = self._get_underlying_dataframe()
@@ -1992,6 +2129,7 @@ class ClimateFiller():
                     range_start,
                     range_end,
                     frequency=target_frequency,
+                    unit=target_unit,
                 )
                 legacy_source_cache_path = self._build_source_cache_path(
                     product,
@@ -2001,6 +2139,7 @@ class ClimateFiller():
                     range_start,
                     range_end,
                     frequency=None,
+                    unit=target_unit,
                 )
                 source_cache_candidate = source_cache_path if os.path.exists(source_cache_path) else legacy_source_cache_path
                 if os.path.exists(source_cache_candidate):
@@ -2110,30 +2249,18 @@ class ClimateFiller():
                     )
                     data.set_dataframe(self._prepare_datetime_column(data.get_dataframe()))
                     data.missing_data('ssrd')
-                    l = []
-                    for p in data.get_index():
-                        if p.hour == 1:
-                            new_value = data.get_row(p)['ssrd']/3600
-                        else:
-                            try:
-                                previous_hour = data.get_row(p-timedelta(hours=1))['ssrd']
-                            except KeyError: # if age is not convertable to int
-                                previous_hour = data.get_row(p)['ssrd']
-                                
-                            new_value = (data.get_row(p)['ssrd'] - previous_hour)/3600
-                        l.append(new_value)
-                    data.add_column('rs', l)
-                    data.keep_columns(['rs'])
-                    data.rename_columns({'rs': 'ssrd'})
-                    
-                    data.transform_column('ssrd', lambda o : o if abs(o) < 1500 else 0 )    
+                    rs_series = self._convert_era5_rs_series_for_target_unit(
+                        data.get_dataframe()['ssrd'],
+                        target_unit=target_unit,
+                        target_frequency_label=target_frequency,
+                    )
                     self._fill_from_source_series(
                         target_column_to_fill_name,
-                        data.get_dataframe()['ssrd'],
+                        rs_series,
                         product,
                         machine_learning_enabled,
                     )
-                    self._save_source_series_cache(data.get_dataframe()['ssrd'], source_cache_path)
+                    self._save_source_series_cache(rs_series, source_cache_path)
                 
                     print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
                 
@@ -2228,6 +2355,7 @@ class ClimateFiller():
                     start,
                     end,
                     frequency=target_frequency,
+                    unit=target_unit,
                 )
                 legacy_source_cache_path = self._build_source_cache_path(
                     product,
@@ -2237,6 +2365,7 @@ class ClimateFiller():
                     start,
                     end,
                     frequency=None,
+                    unit=target_unit,
                 )
                 source_cache_candidate = source_cache_path if os.path.exists(source_cache_path) else legacy_source_cache_path
                 if os.path.exists(source_cache_candidate):
@@ -2365,6 +2494,7 @@ class ClimateFiller():
                     range_start,
                     range_end,
                     frequency=target_frequency,
+                    unit=target_unit,
                 )
                 legacy_source_cache_path = self._build_source_cache_path(
                     product,
@@ -2374,6 +2504,7 @@ class ClimateFiller():
                     range_start,
                     range_end,
                     frequency=None,
+                    unit=target_unit,
                 )
                 source_cache_candidate = source_cache_path if os.path.exists(source_cache_path) else legacy_source_cache_path
                 if os.path.exists(source_cache_candidate):
@@ -2537,30 +2668,18 @@ class ClimateFiller():
                     data.reset_index()
                     data.reindex_dataframe("valid_time")
                     data.missing_data('ssrd')
-                    l = []
-                    for p in data.get_index():
-                        if p.hour == 1:
-                            new_value = data.get_row(p)['ssrd']/3600
-                        else:
-                            try:
-                                previous_hour = data.get_row(p-timedelta(hours=1))['ssrd']
-                            except KeyError: # if age is not convertable to int
-                                previous_hour = data.get_row(p)['ssrd']
-                                
-                            new_value = (data.get_row(p)['ssrd'] - previous_hour)/3600
-                        l.append(new_value)
-                    data.add_column('rs', l)
-                    data.keep_columns(['rs'])
-                    data.rename_columns({'rs': 'ssrd'})
-                    
-                    data.transform_column('ssrd', lambda o : o if abs(o) < 1500 else 0 )    
+                    rs_series = self._convert_era5_rs_series_for_target_unit(
+                        data.get_dataframe()['ssrd'],
+                        target_unit=target_unit,
+                        target_frequency_label=target_frequency,
+                    )
                     self._fill_from_source_series(
                         target_column_to_fill_name,
-                        data.get_dataframe()['ssrd'],
+                        rs_series,
                         product,
                         machine_learning_enabled,
                     )
-                    self._save_source_series_cache(data.get_dataframe()['ssrd'], source_cache_path)
+                    self._save_source_series_cache(rs_series, source_cache_path)
                 
                     print('Imputation of missing data for ' + column_to_fill_name + ' from ERA5-Land was done.')
                 
@@ -2658,6 +2777,7 @@ class ClimateFiller():
                     start,
                     end,
                     frequency=target_frequency,
+                    unit=target_unit,
                 )
                 legacy_source_cache_path = self._build_source_cache_path(
                     product,
@@ -2667,6 +2787,7 @@ class ClimateFiller():
                     start,
                     end,
                     frequency=None,
+                    unit=target_unit,
                 )
                 source_cache_candidate = source_cache_path if os.path.exists(source_cache_path) else legacy_source_cache_path
                 if os.path.exists(source_cache_candidate):
@@ -2742,12 +2863,13 @@ class ClimateFiller():
             
         
 
-    def impute(self, column_to_fill_list='ta',
+    def impute(self, column_to_fill_list=['ta'],
                               product="era5_land",
                               machine_learning_enabled=False,
                               train_ratio=1,
                               model_name='xgboost',
                               export_dataset=False,
+                              unit_dict=None,
                               **kwargs
                               ):
         """
@@ -2755,6 +2877,15 @@ class ClimateFiller():
 
         Args:
             column_to_fill_list (str or list[str]): Column name or list of column names to impute.
+            product (str): Remote product used for gap-filling. Defaults to 'era5_land'.
+            machine_learning_enabled (bool): Whether to use ML residual correction.
+            train_ratio (float): Train ratio for the ML residual model.
+            model_name (str): ML model name.
+            export_dataset (bool): Whether to export the ML training dataset.
+            unit_dict (dict or None): Optional mapping of target variable/column -> unit.
+                If a variable has no entry, the current default conversion is used.
+                Example: ``{'rs': 'mj/m2/day'}`` converts ERA5 SSRD (J/m2) to daily MJ/m2/day
+                by summing hourly energy and dividing by 1e6.
 
         Returns:
             ClimateFiller: The current instance for chaining.
@@ -2764,6 +2895,15 @@ class ClimateFiller():
         else:
             column_names = list(column_to_fill_list)
 
+        if unit_dict is None:
+            unit_dict = {}
+        elif not isinstance(unit_dict, dict):
+            raise TypeError(
+                f"unit_dict must be a dictionary of variable->unit mappings, got {type(unit_dict).__name__}."
+            )
+
+        self._impute_unit_dict = unit_dict
+
         for column_name in column_names:
             self._impute_single_column(
                 column_name,
@@ -2772,6 +2912,7 @@ class ClimateFiller():
                 train_ratio=train_ratio,
                 model_name=model_name,
                 export_dataset=export_dataset,
+                unit_dict=unit_dict,
                 **kwargs,
             )
 
