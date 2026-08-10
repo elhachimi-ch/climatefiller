@@ -42,9 +42,183 @@ class Lib:
     
     def __init__(self, *args, **kwargs):
         pass
+
+    # --- Unit helpers for ETo methods -------------------------------------------------
+    # Expected FAO-56 daily targets: ta °C, rh %, ws m/s, rs MJ/m2/day.
+    # If a variable's unit is omitted from units_dict, keep the legacy conversion path.
+
+    @staticmethod
+    def _normalize_unit_string(unit):
+        if unit is None:
+            return None
+        text = str(unit).strip().lower()
+        for old, new in (
+            ('²', '2'),
+            ('³', '3'),
+            ('°', ''),
+            ('µ', 'u'),
+            ('μ', 'u'),
+            ('·', ''),
+            (' ', ''),
+            ('_', ''),
+            ('-', ''),
+        ):
+            text = text.replace(old, new)
+        return text
+
+    @staticmethod
+    def get_unit_from_dict(units_dict, *keys):
+        """Return the first matching unit for any of the given keys (case-insensitive)."""
+        if not units_dict:
+            return None
+        lowered = {str(k).lower(): v for k, v in units_dict.items()}
+        for key in keys:
+            if key is None:
+                continue
+            value = lowered.get(str(key).lower())
+            if value is not None:
+                return value
+        return None
+
+    @staticmethod
+    def convert_temperature_to_celsius(value, units_dict=None, *keys):
+        """Convert temperature to °C. Missing unit => assume already °C (legacy)."""
+        unit = Lib.get_unit_from_dict(units_dict, *(keys or ()), 'ta', 'ta_mean', 't', 'temp', 'temperature')
+        if unit is None:
+            return value
+        normalized = Lib._normalize_unit_string(unit)
+        if normalized in {'c', 'celsius', 'degc', 'degreecelsius', 'oc'}:
+            return value
+        if normalized in {'k', 'kelvin', 'degk', 'degreekelvin'}:
+            return value - 273.15
+        if normalized in {'f', 'fahrenheit', 'degf', 'degreefahrenheit', 'of'}:
+            return (value - 32.0) * 5.0 / 9.0
+        raise ValueError(
+            f"Unsupported temperature unit '{unit}'. Expected one of: C, K, F (or aliases)."
+        )
+
+    @staticmethod
+    def convert_rh_to_percent(value, units_dict=None, *keys):
+        """Convert relative humidity to percent. Missing unit => assume already % (legacy)."""
+        unit = Lib.get_unit_from_dict(units_dict, *(keys or ()), 'rh', 'rh_mean', 'humidity')
+        if unit is None:
+            return value
+        normalized = Lib._normalize_unit_string(unit)
+        if normalized in {'%', 'percent', 'percentage', 'pct'}:
+            return value
+        if normalized in {'fraction', 'ratio', '01', '0to1'}:
+            return value * 100.0
+        raise ValueError(
+            f"Unsupported relative humidity unit '{unit}'. Expected %, percent, or fraction."
+        )
+
+    @staticmethod
+    def convert_wind_to_ms(value, units_dict=None, *keys):
+        """Convert wind speed to m/s. Missing unit => assume already m/s (legacy)."""
+        unit = Lib.get_unit_from_dict(units_dict, *(keys or ()), 'ws', 'ws_mean', 'u2', 'wind', 'wind_speed')
+        if unit is None:
+            return value
+        normalized = Lib._normalize_unit_string(unit)
+        if normalized in {'m/s', 'ms', 'ms1', 'mps', 'meterspersecond'}:
+            return value
+        if normalized in {'km/h', 'kmh', 'kph', 'kilometersperhour'}:
+            return value / 3.6
+        if normalized in {'mph', 'mi/h', 'milesperhour'}:
+            return value * 0.44704
+        raise ValueError(
+            f"Unsupported wind speed unit '{unit}'. Expected one of: m/s, km/h, mph."
+        )
+
+    @staticmethod
+    def convert_rs_to_mj_m2_day(value, units_dict=None, legacy_factor=0.0864, *keys):
+        """
+        Convert solar radiation to MJ/m2/day.
+
+        Missing unit => apply legacy_factor (default 0.0864 for W/m2 over 24h).
+        If unit is already MJ/m2/day (or alias), return value unchanged.
+        """
+        unit = Lib.get_unit_from_dict(
+            units_dict,
+            *(keys or ()),
+            'rs',
+            'rs_mean',
+            'rs_daily',
+            'radiation',
+            'solar_radiation',
+        )
+        if unit is None:
+            return value * legacy_factor
+
+        normalized = Lib._normalize_unit_string(unit)
+        # Already in target daily energy unit
+        if normalized in {
+            'mj/m2/day',
+            'mj/m2/d',
+            'mjm2day',
+            'mjm2d',
+            'mjm2day1',
+            'mj/m2day',
+            'mj/m^2/day',
+            'mjm^2day',
+        }:
+            return value
+        # Instantaneous / mean irradiance (W/m2) -> MJ/m2/day over 24h
+        if normalized in {'w/m2', 'wm2', 'w/m^2', 'wm^2', 'wattsperm2', 'w/m2/day'}:
+            return value * 0.0864
+        # kJ/m2/day
+        if normalized in {'kj/m2/day', 'kj/m2/d', 'kjm2day', 'kjm2d', 'kj/m^2/day'}:
+            return value / 1000.0
+        # J/m2/day
+        if normalized in {'j/m2/day', 'j/m2/d', 'jm2day', 'jm2d', 'j/m^2/day'}:
+            return value / 1_000_000.0
+        # MJ/m2/h (rare for daily methods)
+        if normalized in {'mj/m2/h', 'mj/m2/hour', 'mjm2h', 'mj/m^2/h'}:
+            return value * 24.0
+        raise ValueError(
+            f"Unsupported solar radiation unit '{unit}'. "
+            "Expected one of: MJ/m2/day, W/m2, kJ/m2/day, J/m2/day."
+        )
+
+    @staticmethod
+    def convert_rs_to_mj_m2_hour(value, units_dict=None, legacy_factor=3.6e-3, *keys):
+        """
+        Convert solar radiation to MJ/m2/hour.
+
+        Missing unit => apply legacy_factor (default 3.6e-3 for W/m2).
+        """
+        unit = Lib.get_unit_from_dict(
+            units_dict,
+            *(keys or ()),
+            'rs',
+            'rs_mean',
+            'radiation',
+            'solar_radiation',
+        )
+        if unit is None:
+            return value * legacy_factor
+
+        normalized = Lib._normalize_unit_string(unit)
+        if normalized in {'mj/m2/h', 'mj/m2/hour', 'mjm2h', 'mj/m^2/h', 'mj/m2/hr'}:
+            return value
+        if normalized in {
+            'mj/m2/day',
+            'mj/m2/d',
+            'mjm2day',
+            'mjm2d',
+            'mj/m^2/day',
+        }:
+            return value / 24.0
+        if normalized in {'w/m2', 'wm2', 'w/m^2', 'wm^2', 'wattsperm2'}:
+            return value * 3.6e-3
+        if normalized in {'kj/m2/h', 'kj/m2/hour', 'kjm2h'}:
+            return value / 1000.0
+        raise ValueError(
+            f"Unsupported hourly solar radiation unit '{unit}'. "
+            "Expected one of: MJ/m2/h, MJ/m2/day, W/m2, kJ/m2/h."
+        )
     
     @staticmethod
-    def eto_penman_monteith_daily_v3(row):
+    def eto_penman_monteith_daily_v3(row, units_dict=None):
         # input variables
         # T = 25.0  # air temperature in degrees Celsius
         # RH = 60.0  # relative humidity in percent
@@ -52,7 +226,14 @@ class Lib:
         # Rs = 15.0  # incoming solar radiation in MJ/m2/day
         # lat = 35.0  # latitude in degrees
         
-        ta_mean_c, rh_mean, u2_mean, rs_daily, lat, elevation, doy =  row['ta_mean'],  row['rh_mean'], row['ws_mean'], row['rs_daily'], row['lat'], row['elevation'], row['doy']
+        ta_mean_c = Lib.convert_temperature_to_celsius(row['ta_mean'], units_dict, 'ta_mean', 'ta')
+        rh_mean = Lib.convert_rh_to_percent(row['rh_mean'], units_dict, 'rh_mean', 'rh')
+        u2_mean = Lib.convert_wind_to_ms(row['ws_mean'], units_dict, 'ws_mean', 'ws')
+        # rs_daily historically already treated as MJ/m2/day (no legacy *0.0864)
+        rs_daily = Lib.convert_rs_to_mj_m2_day(
+            row['rs_daily'], units_dict, legacy_factor=1.0, 'rs_daily', 'rs', 'rs_mean'
+        )
+        lat, elevation, doy = row['lat'], row['elevation'], row['doy']
         
         # constants
         ALBEDO = 0.23  # Albedo coefficient for grass reference surface
