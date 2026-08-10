@@ -685,7 +685,7 @@ def test_eto_estimation_daily_pm_uses_preaggregated_columns(monkeypatch):
 
     monkeypatch.setattr(
         'climatefiller.Lib.eto_penman_monteith_daily',
-        lambda row: 4.2,
+        lambda row, units_dict=None: 4.2,
     )
 
     result = cf.eto_estimation_daily(
@@ -730,11 +730,11 @@ def test_eto_estimation_daily_multiple_methods_add_columns(monkeypatch):
 
     monkeypatch.setattr(
         'climatefiller.Lib.eto_penman_monteith_daily',
-        lambda row: 4.2,
+        lambda row, units_dict=None: 4.2,
     )
     monkeypatch.setattr(
         'climatefiller.Lib.eto_hargreaves_samani',
-        lambda row, c=0.0023, a=17.8, b=0.5: 3.1,
+        lambda row, c=0.0023, a=17.8, b=0.5, units_dict=None: 3.1,
     )
 
     result = cf.eto_estimation_daily(
@@ -776,6 +776,81 @@ def test_eto_estimation_daily_requires_method_specific_columns():
         assert 'rs_mean' in str(exc) or 'Missing required daily column' in str(exc)
 
     assert raised
+
+
+def test_convert_rs_to_mj_m2_day_respects_units_dict():
+    from lib import Lib
+
+    # Legacy path (no unit): W/m2 * 0.0864
+    assert Lib.convert_rs_to_mj_m2_day(100.0) == 100.0 * 0.0864
+    assert Lib.convert_rs_to_mj_m2_day(100.0, units_dict=None) == 100.0 * 0.0864
+    assert Lib.convert_rs_to_mj_m2_day(100.0, units_dict={}) == 100.0 * 0.0864
+
+    # Already MJ/m2/day: no conversion
+    assert Lib.convert_rs_to_mj_m2_day(18.0, units_dict={'rs': 'MJ/m2/day'}) == 18.0
+    assert Lib.convert_rs_to_mj_m2_day(18.0, units_dict={'rs_mean': 'MJ/m2/day'}) == 18.0
+
+    # Explicit W/m2: convert
+    assert Lib.convert_rs_to_mj_m2_day(100.0, units_dict={'rs': 'W/m2'}) == 100.0 * 0.0864
+
+
+def test_eto_estimation_daily_units_dict_skips_rs_conversion_when_mj():
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+    from lib import Lib
+
+    base_row = {
+        'ta_max': 30.0,
+        'ta_min': 18.0,
+        'rh_max': 80.0,
+        'rh_min': 40.0,
+        'ws_mean': 2.0,
+        'lat': 31.65,
+        'elevation': 500.0,
+        'doy': 1,
+    }
+
+    # Same physical radiation: 18 MJ/m2/day == 18/0.0864 W/m2
+    rs_mj = 18.0
+    rs_wm2 = rs_mj / 0.0864
+
+    eto_legacy = Lib.eto_penman_monteith_daily({**base_row, 'rs_mean': rs_wm2})
+    eto_mj = Lib.eto_penman_monteith_daily(
+        {**base_row, 'rs_mean': rs_mj},
+        units_dict={'rs': 'MJ/m2/day'},
+    )
+    eto_wrong_if_converted = Lib.eto_penman_monteith_daily({**base_row, 'rs_mean': rs_mj})
+
+    assert abs(eto_legacy - eto_mj) < 1e-9
+    # Without units_dict, providing MJ values would wrongly apply *0.0864
+    assert abs(eto_wrong_if_converted - eto_mj) > 0.1
+
+    daily_df = pd.DataFrame(
+        {
+            'date': ['2020-01-01 00:00:00'],
+            'ta_max': [30.0],
+            'ta_min': [18.0],
+            'rh_max': [80.0],
+            'rh_min': [40.0],
+            'ws_mean': [2.0],
+            'rs_mean': [rs_mj],
+        }
+    )
+    cf = ClimateFiller(
+        daily_df,
+        datetime_column_name='date',
+        backend='local',
+        lat=31.65,
+        lon=-7.6,
+        elevation=500,
+    )
+    result = cf.eto_estimation_daily(
+        methods_list=['pm', 'ab', 'mk'],
+        units_dict={'rs': 'MJ/m2/day'},
+    )
+    assert 'eto_pm' in result.columns
+    assert 'eto_ab' in result.columns
+    assert 'eto_mk' in result.columns
+    assert abs(result['eto_pm'].iloc[0] - round(eto_mj, 2)) < 1e-9
 
 
 def test_elevation_number_is_kept_as_value():
@@ -966,11 +1041,11 @@ def test_eto_estimation_multiple_methods_add_columns(monkeypatch):
 
     monkeypatch.setattr(
         'climatefiller.Lib.eto_penman_monteith_daily',
-        lambda row: 4.2,
+        lambda row, units_dict=None: 4.2,
     )
     monkeypatch.setattr(
         'climatefiller.Lib.eto_hargreaves_samani',
-        lambda row, c=0.0023, a=17.8, b=0.5: 3.1,
+        lambda row, c=0.0023, a=17.8, b=0.5, units_dict=None: 3.1,
     )
 
     result = cf.eto_estimation(

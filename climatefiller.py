@@ -3538,6 +3538,7 @@ class ClimateFiller():
         b_hs=0.5,
         k1_ab=0.53,
         alpha_pt=1.26,
+        units_dict=None,
     ):
         """
         Estimate daily reference evapotranspiration (ETo) from an already-daily weather dataset.
@@ -3562,6 +3563,13 @@ class ClimateFiller():
             c_hs, a_hs, b_hs: Hargreaves-Samani coefficients.
             k1_ab: Abtew coefficient.
             alpha_pt: Priestley-Taylor coefficient.
+            units_dict (dict or None): Optional units for input variables. Keys may be short names
+                (e.g. 'rs', 'ta', 'rh', 'ws') or column-style names (e.g. 'rs_mean', 'ta_max').
+                When a variable's unit is omitted, the legacy conversion path is kept
+                (e.g. rs treated as W/m2 and converted with *0.0864).
+                When provided, values are converted to FAO-56 targets:
+                ta °C, rh %, ws m/s, rs MJ/m2/day.
+                Example: {'rs': 'MJ/m2/day'} skips the W/m2->MJ/m2/day conversion.
 
         Returns:
             pandas.DataFrame: Daily dataframe with ETo column(s) and supporting columns.
@@ -3576,6 +3584,13 @@ class ClimateFiller():
             - tu: ta_mean, rh_mean, rs_mean
             - mk: ta_mean, rs_mean (+ elevation)
         """
+        if units_dict is None:
+            units_dict = {}
+        elif not isinstance(units_dict, dict):
+            raise TypeError(
+                "units_dict must be a dict of variable->unit or None. "
+                f"Got type {type(units_dict).__name__}."
+            )
         if methods_list is None:
             methods_list = ['pm']
         elif isinstance(methods_list, str):
@@ -3678,29 +3693,42 @@ class ClimateFiller():
             if method == 'pm':
                 data_temp.add_column_based_on_function(
                     output_column,
-                    lambda row: Lib.eto_penman_monteith_daily(row),
+                    lambda row, ud=units_dict: Lib.eto_penman_monteith_daily(row, units_dict=ud),
                 )
             elif method == 'hs':
                 data_temp.add_column_based_on_function(
                     output_column,
-                    lambda row, c=c_hs, a=a_hs, b=b_hs: Lib.eto_hargreaves_samani(row, c=c, a=a, b=b),
+                    lambda row, c=c_hs, a=a_hs, b=b_hs, ud=units_dict: Lib.eto_hargreaves_samani(
+                        row, c=c, a=a, b=b, units_dict=ud
+                    ),
                 )
             elif method == 'pt':
                 data_temp.add_column_based_on_function(
                     output_column,
-                    lambda row, alpha=alpha_pt: Lib.eto_priestley_taylor_daily(row, alpha),
+                    lambda row, alpha=alpha_pt, ud=units_dict: Lib.eto_priestley_taylor_daily(
+                        row, alpha, units_dict=ud
+                    ),
                 )
             elif method == 'sd':
-                data_temp.add_column_based_on_function(output_column, Lib.eto_schendel)
+                data_temp.add_column_based_on_function(
+                    output_column,
+                    lambda row, ud=units_dict: Lib.eto_schendel(row, units_dict=ud),
+                )
             elif method == 'ab':
                 data_temp.add_column_based_on_function(
                     output_column,
-                    lambda row, k1=k1_ab: Lib.eto_abtew(row, k1=k1),
+                    lambda row, k1=k1_ab, ud=units_dict: Lib.eto_abtew(row, k1=k1, units_dict=ud),
                 )
             elif method == 'tu':
-                data_temp.add_column_based_on_function(output_column, Lib.eto_turc)
+                data_temp.add_column_based_on_function(
+                    output_column,
+                    lambda row, ud=units_dict: Lib.eto_turc(row, units_dict=ud),
+                )
             elif method == 'mk':
-                data_temp.add_column_based_on_function(output_column, Lib.eto_makkink)
+                data_temp.add_column_based_on_function(
+                    output_column,
+                    lambda row, ud=units_dict: Lib.eto_makkink(row, units_dict=ud),
+                )
 
             if method in {'pm', 'hs', 'pt', 'mk', 'ab'}:
                 if method != 'ab':
@@ -3729,6 +3757,7 @@ class ClimateFiller():
         b_hs=0.5,
         k1_ab=0.53,
         alpha_pt=1.26,
+        units_dict=None,
         prefix=None,
         datetime_format='%Y-%m-%d %H:%M:%S',
     ):
@@ -3748,6 +3777,7 @@ class ClimateFiller():
                 in the same output file (e.g. eto_pm, eto_hs). Defaults to ['pm'].
             nbr_decimal_places (int): Rounding precision for ETo outputs.
             c_hs, a_hs, b_hs, k1_ab, alpha_pt: Model coefficients.
+            units_dict (dict or None): Optional variable units forwarded to eto_estimation_daily().
             prefix (str or None): If provided, process only files that start with prefix.
             datetime_format (str): Datetime parsing format for per-file initialization.
 
@@ -3851,6 +3881,7 @@ class ClimateFiller():
                 b_hs=b_hs,
                 k1_ab=k1_ab,
                 alpha_pt=alpha_pt,
+                units_dict=units_dict,
             )
 
             export_df = estimator.eto_output_data.get_dataframe().copy()

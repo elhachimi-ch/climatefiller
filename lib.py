@@ -81,9 +81,10 @@ class Lib:
         return None
 
     @staticmethod
-    def convert_temperature_to_celsius(value, units_dict=None, *keys):
+    def convert_temperature_to_celsius(value, units_dict=None, variable_keys=None):
         """Convert temperature to °C. Missing unit => assume already °C (legacy)."""
-        unit = Lib.get_unit_from_dict(units_dict, *(keys or ()), 'ta', 'ta_mean', 't', 'temp', 'temperature')
+        keys = tuple(variable_keys or ()) + ('ta', 'ta_mean', 't', 'temp', 'temperature')
+        unit = Lib.get_unit_from_dict(units_dict, *keys)
         if unit is None:
             return value
         normalized = Lib._normalize_unit_string(unit)
@@ -98,9 +99,10 @@ class Lib:
         )
 
     @staticmethod
-    def convert_rh_to_percent(value, units_dict=None, *keys):
+    def convert_rh_to_percent(value, units_dict=None, variable_keys=None):
         """Convert relative humidity to percent. Missing unit => assume already % (legacy)."""
-        unit = Lib.get_unit_from_dict(units_dict, *(keys or ()), 'rh', 'rh_mean', 'humidity')
+        keys = tuple(variable_keys or ()) + ('rh', 'rh_mean', 'humidity')
+        unit = Lib.get_unit_from_dict(units_dict, *keys)
         if unit is None:
             return value
         normalized = Lib._normalize_unit_string(unit)
@@ -113,9 +115,10 @@ class Lib:
         )
 
     @staticmethod
-    def convert_wind_to_ms(value, units_dict=None, *keys):
+    def convert_wind_to_ms(value, units_dict=None, variable_keys=None):
         """Convert wind speed to m/s. Missing unit => assume already m/s (legacy)."""
-        unit = Lib.get_unit_from_dict(units_dict, *(keys or ()), 'ws', 'ws_mean', 'u2', 'wind', 'wind_speed')
+        keys = tuple(variable_keys or ()) + ('ws', 'ws_mean', 'u2', 'wind', 'wind_speed')
+        unit = Lib.get_unit_from_dict(units_dict, *keys)
         if unit is None:
             return value
         normalized = Lib._normalize_unit_string(unit)
@@ -130,22 +133,21 @@ class Lib:
         )
 
     @staticmethod
-    def convert_rs_to_mj_m2_day(value, units_dict=None, legacy_factor=0.0864, *keys):
+    def convert_rs_to_mj_m2_day(value, units_dict=None, legacy_factor=0.0864, variable_keys=None):
         """
         Convert solar radiation to MJ/m2/day.
 
         Missing unit => apply legacy_factor (default 0.0864 for W/m2 over 24h).
         If unit is already MJ/m2/day (or alias), return value unchanged.
         """
-        unit = Lib.get_unit_from_dict(
-            units_dict,
-            *(keys or ()),
+        keys = tuple(variable_keys or ()) + (
             'rs',
             'rs_mean',
             'rs_daily',
             'radiation',
             'solar_radiation',
         )
+        unit = Lib.get_unit_from_dict(units_dict, *keys)
         if unit is None:
             return value * legacy_factor
 
@@ -180,20 +182,19 @@ class Lib:
         )
 
     @staticmethod
-    def convert_rs_to_mj_m2_hour(value, units_dict=None, legacy_factor=3.6e-3, *keys):
+    def convert_rs_to_mj_m2_hour(value, units_dict=None, legacy_factor=3.6e-3, variable_keys=None):
         """
         Convert solar radiation to MJ/m2/hour.
 
         Missing unit => apply legacy_factor (default 3.6e-3 for W/m2).
         """
-        unit = Lib.get_unit_from_dict(
-            units_dict,
-            *(keys or ()),
+        keys = tuple(variable_keys or ()) + (
             'rs',
             'rs_mean',
             'radiation',
             'solar_radiation',
         )
+        unit = Lib.get_unit_from_dict(units_dict, *keys)
         if unit is None:
             return value * legacy_factor
 
@@ -226,12 +227,21 @@ class Lib:
         # Rs = 15.0  # incoming solar radiation in MJ/m2/day
         # lat = 35.0  # latitude in degrees
         
-        ta_mean_c = Lib.convert_temperature_to_celsius(row['ta_mean'], units_dict, 'ta_mean', 'ta')
-        rh_mean = Lib.convert_rh_to_percent(row['rh_mean'], units_dict, 'rh_mean', 'rh')
-        u2_mean = Lib.convert_wind_to_ms(row['ws_mean'], units_dict, 'ws_mean', 'ws')
+        ta_mean_c = Lib.convert_temperature_to_celsius(
+            row['ta_mean'], units_dict, variable_keys=('ta_mean', 'ta')
+        )
+        rh_mean = Lib.convert_rh_to_percent(
+            row['rh_mean'], units_dict, variable_keys=('rh_mean', 'rh')
+        )
+        u2_mean = Lib.convert_wind_to_ms(
+            row['ws_mean'], units_dict, variable_keys=('ws_mean', 'ws')
+        )
         # rs_daily historically already treated as MJ/m2/day (no legacy *0.0864)
         rs_daily = Lib.convert_rs_to_mj_m2_day(
-            row['rs_daily'], units_dict, legacy_factor=1.0, 'rs_daily', 'rs', 'rs_mean'
+            row['rs_daily'],
+            units_dict,
+            legacy_factor=1.0,
+            variable_keys=('rs_daily', 'rs', 'rs_mean'),
         )
         lat, elevation, doy = row['lat'], row['elevation'], row['doy']
         
@@ -301,7 +311,7 @@ class Lib:
         return et0
     
     @staticmethod
-    def eto_penman_monteith_daily(row):
+    def eto_penman_monteith_daily(row, units_dict=None):
         # input variables
         # T = 25.0  # air temperature in degrees Celsius
         # RH = 60.0  # relative humidity in percent
@@ -311,9 +321,25 @@ class Lib:
         
         G = 0  # Soil heat flux density (MJ/m2/day)
         
-        ta_max, ta_min, rh_max, rh_min, u2_mean, rs_mean, lat, elevation, doy =  row['ta_max'], row['ta_min'], row['rh_max'], row['rh_min'], row['ws_mean'], row['rs_mean'], row['lat'], row['elevation'], row['doy']
-        
-        rs_mean *= 0.0864  # convert watts per square meter to megajoules per square meter 0.0288 = 60x60x8hours or 0.0864 for 24 hours
+        ta_max = Lib.convert_temperature_to_celsius(
+            row['ta_max'], units_dict, variable_keys=('ta_max', 'ta')
+        )
+        ta_min = Lib.convert_temperature_to_celsius(
+            row['ta_min'], units_dict, variable_keys=('ta_min', 'ta')
+        )
+        rh_max = Lib.convert_rh_to_percent(
+            row['rh_max'], units_dict, variable_keys=('rh_max', 'rh')
+        )
+        rh_min = Lib.convert_rh_to_percent(
+            row['rh_min'], units_dict, variable_keys=('rh_min', 'rh')
+        )
+        u2_mean = Lib.convert_wind_to_ms(
+            row['ws_mean'], units_dict, variable_keys=('ws_mean', 'ws')
+        )
+        rs_mean = Lib.convert_rs_to_mj_m2_day(
+            row['rs_mean'], units_dict, variable_keys=('rs_mean', 'rs')
+        )
+        lat, elevation, doy = row['lat'], row['elevation'], row['doy']
 
         ta_mean = (ta_max + ta_min) / 2
         ta_max_kelvin = ta_max + 273.16  # air temperature in Kelvin
@@ -385,6 +411,7 @@ class Lib:
         ws_column_name,
         tz_offset,
         reference_crop,
+        units_dict=None,
         ):
         # input variables
         # T = 25.0  # air temperature in degrees Celsius
@@ -393,10 +420,20 @@ class Lib:
         # Rs = 15.0  # incoming solar radiation in MJ/m2/day
         # lat = 35.0  # latitude in degrees
         
-        ta_c, rs, rh, u2, lat, elevation, doy, lon, hod =  row[ta_column_name], row[rs_column_name], row[rh_column_name], row[ws_column_name], row['lat'], row['elevation'], row['doy'], row['lon'], row['hod']
+        ta_c = Lib.convert_temperature_to_celsius(
+            row[ta_column_name], units_dict, variable_keys=('ta', 'ta_mean', ta_column_name)
+        )
+        rs = Lib.convert_rs_to_mj_m2_hour(
+            row[rs_column_name], units_dict, variable_keys=('rs', 'rs_mean', rs_column_name)
+        )
+        rh = Lib.convert_rh_to_percent(
+            row[rh_column_name], units_dict, variable_keys=('rh', 'rh_mean', rh_column_name)
+        )
+        u2 = Lib.convert_wind_to_ms(
+            row[ws_column_name], units_dict, variable_keys=('ws', 'ws_mean', ws_column_name)
+        )
+        lat, elevation, doy, lon, hod = row['lat'], row['elevation'], row['doy'], row['lon'], row['hod']
         
-        # convert units
-        rs *= 3.6e-3  # convert watts per square meter to megajoules per square meter 0.0288 = 60x60x8hours or 0.0864 for 24 hours
         ta_k = ta_c + 273.16  # air temperature in Kelvin
         
         lambda_heat = Lib.latent_heat_of_vaporization(ta_c)
@@ -473,6 +510,7 @@ class Lib:
     @staticmethod
     def eto_penman_monteith_daily_v2(
         row,
+        units_dict=None,
         ):
         # input variables
         # T = 25.0  # air temperature in degrees Celsius
@@ -482,7 +520,23 @@ class Lib:
         # lat = 35.0  # latitude in degrees
         G = 0
         
-        ta_mean_c, rs_daily, rh_mean, ws_mean, lat, elevation, doy =  row['ta_mean'], row['rs_daily'], row['rh_mean'], row['ws_mean'], row['lat'], row['elevation'], row['doy']
+        ta_mean_c = Lib.convert_temperature_to_celsius(
+            row['ta_mean'], units_dict, variable_keys=('ta_mean', 'ta')
+        )
+        # rs_daily historically already treated as MJ/m2/day (no legacy *0.0864)
+        rs_daily = Lib.convert_rs_to_mj_m2_day(
+            row['rs_daily'],
+            units_dict,
+            legacy_factor=1.0,
+            variable_keys=('rs_daily', 'rs', 'rs_mean'),
+        )
+        rh_mean = Lib.convert_rh_to_percent(
+            row['rh_mean'], units_dict, variable_keys=('rh_mean', 'rh')
+        )
+        ws_mean = Lib.convert_wind_to_ms(
+            row['ws_mean'], units_dict, variable_keys=('ws_mean', 'ws')
+        )
+        lat, elevation, doy = row['lat'], row['elevation'], row['doy']
         
         ta_mean_k = ta_mean_c + 273.16  # air temperature in Kelvin
         
@@ -825,8 +879,17 @@ class Lib:
         return rn_l
     
     @staticmethod
-    def eto_hargreaves_samani(row, c=0.0023, a=17.8, b=0.5):
-        ta_mean, ta_max, ta_min, lat, doy =  row['ta_mean'], row['ta_max'], row['ta_min'], row['lat'], row['doy']
+    def eto_hargreaves_samani(row, c=0.0023, a=17.8, b=0.5, units_dict=None):
+        ta_mean = Lib.convert_temperature_to_celsius(
+            row['ta_mean'], units_dict, variable_keys=('ta_mean', 'ta')
+        )
+        ta_max = Lib.convert_temperature_to_celsius(
+            row['ta_max'], units_dict, variable_keys=('ta_max', 'ta')
+        )
+        ta_min = Lib.convert_temperature_to_celsius(
+            row['ta_min'], units_dict, variable_keys=('ta_min', 'ta')
+        )
+        lat, doy = row['lat'], row['doy']
         
         ra = Lib.extraterrestrial_radiation_daily(lat, doy)
         
@@ -1202,7 +1265,7 @@ class Lib:
         return omega
     
     @staticmethod
-    def eto_priestley_taylor_daily(row, alpha=1.26):
+    def eto_priestley_taylor_daily(row, alpha=1.26, units_dict=None):
         # input variables
         # T = 25.0  # air temperature in degrees Celsius
         # RH = 60.0  # relative humidity in percent
@@ -1213,9 +1276,22 @@ class Lib:
         #ta_mean, rs_mean, rh_mean, lat, elevation, doy =  row['ta_mean'], row['rs_mean'], row['rh_mean'], row['lat'], row['elevation'], row['doy']
         G = 0  # Soil heat flux density (MJ/m2/day)
         
-        ta_max, ta_min, rh_max, rh_min, rs_mean, lat, elevation, doy =  row['ta_max'], row['ta_min'], row['rh_max'], row['rh_min'], row['rs_mean'], row['lat'], row['elevation'], row['doy']
-        
-        rs_mean *= 0.0864  # convert watts per square meter to megajoules per square meter 0.0288 = 60x60x8hours or 0.0864 for 24 hours
+        ta_max = Lib.convert_temperature_to_celsius(
+            row['ta_max'], units_dict, variable_keys=('ta_max', 'ta')
+        )
+        ta_min = Lib.convert_temperature_to_celsius(
+            row['ta_min'], units_dict, variable_keys=('ta_min', 'ta')
+        )
+        rh_max = Lib.convert_rh_to_percent(
+            row['rh_max'], units_dict, variable_keys=('rh_max', 'rh')
+        )
+        rh_min = Lib.convert_rh_to_percent(
+            row['rh_min'], units_dict, variable_keys=('rh_min', 'rh')
+        )
+        rs_mean = Lib.convert_rs_to_mj_m2_day(
+            row['rs_mean'], units_dict, variable_keys=('rs_mean', 'rs')
+        )
+        lat, elevation, doy = row['lat'], row['elevation'], row['doy']
 
         ta_mean = (ta_max + ta_min) / 2
         ta_max_kelvin = ta_max + 273.16  # air temperature in Kelvin
@@ -1273,7 +1349,7 @@ class Lib:
         return epsilon_net
     
     @staticmethod
-    def eto_priestley_taylor_daily_v2(row):
+    def eto_priestley_taylor_daily_v2(row, units_dict=None):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -1288,12 +1364,21 @@ class Lib:
         float: Estimated ET0 in mm/day.
         """
         
-        ta_c = row['ta_mean']
+        ta_c = Lib.convert_temperature_to_celsius(
+            row['ta_mean'], units_dict, variable_keys=('ta_mean', 'ta')
+        )
         
         seconds_per_day = 36000 # 43200 for 12 hours number of seconds in a day 86400 for 24 hours
         
-        # Conversion from W/m² to kJ/m²/day
-        rs_kj_per_m2 = (row['rs_mean'] * seconds_per_day) / 1000  # Convert joules to kilojoules
+        # Conversion from W/m² to kJ/m²/day (legacy). If rs already energy, convert to kJ/m2/day.
+        rs_unit = Lib.get_unit_from_dict(units_dict, 'rs', 'rs_mean', 'radiation', 'solar_radiation')
+        if rs_unit is None:
+            rs_kj_per_m2 = (row['rs_mean'] * seconds_per_day) / 1000  # Convert joules to kilojoules
+        else:
+            rs_mj_per_m2 = Lib.convert_rs_to_mj_m2_day(
+                row['rs_mean'], units_dict, variable_keys=('rs_mean', 'rs')
+            )
+            rs_kj_per_m2 = rs_mj_per_m2 * 1000.0
         
         #elevation = row['elevation']
         GHO = Lib.DENSITY_OF_WATER
@@ -1309,7 +1394,7 @@ class Lib:
         return et0 * 1000
     
     @staticmethod
-    def eto_priestley_taylor_hourly(row, ta_column_name, rs_column_name):
+    def eto_priestley_taylor_hourly(row, ta_column_name, rs_column_name, units_dict=None):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -1324,12 +1409,25 @@ class Lib:
         float: Estimated ET0 in mm/day.
         """
         
-        ta_c = row[ta_column_name]
+        ta_c = Lib.convert_temperature_to_celsius(
+            row[ta_column_name], units_dict, variable_keys=('ta', 'ta_mean', ta_column_name)
+        )
         
         seconds_per_day = 3600 # 43200 for 12 hours number of seconds in a day 86400 for 24 hours
         
-        # Conversion from W/m² to kJ/m²/day
-        rs_kj_per_m2 = (row[rs_column_name] * seconds_per_day) / 1000  # Convert joules to kilojoules
+        # Conversion from W/m² to kJ/m²/hour (legacy). If rs already energy, convert accordingly.
+        rs_unit = Lib.get_unit_from_dict(
+            units_dict, 'rs', 'rs_mean', rs_column_name, 'radiation', 'solar_radiation'
+        )
+        if rs_unit is None:
+            rs_kj_per_m2 = (row[rs_column_name] * seconds_per_day) / 1000  # Convert joules to kilojoules
+        else:
+            rs_mj_per_m2 = Lib.convert_rs_to_mj_m2_hour(
+                row[rs_column_name],
+                units_dict,
+                variable_keys=('rs', 'rs_mean', rs_column_name),
+            )
+            rs_kj_per_m2 = rs_mj_per_m2 * 1000.0
         
         #elevation = row['elevation']
         GHO = Lib.DENSITY_OF_WATER
@@ -1346,7 +1444,7 @@ class Lib:
         return et0 * 1000
     
     @staticmethod
-    def eto_schendel(row):
+    def eto_schendel(row, units_dict=None):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -1361,15 +1459,19 @@ class Lib:
         float: Estimated ET0 in mm/day.
         """
         
-        ta_mean_c = row['ta_mean']
-        rh_mean = row['rh_mean']
+        ta_mean_c = Lib.convert_temperature_to_celsius(
+            row['ta_mean'], units_dict, variable_keys=('ta_mean', 'ta')
+        )
+        rh_mean = Lib.convert_rh_to_percent(
+            row['rh_mean'], units_dict, variable_keys=('rh_mean', 'rh')
+        )
         
         
         et0 = 16 * (ta_mean_c / rh_mean)
         return et0
     
     @staticmethod
-    def eto_abtew(row, k1=0.53):
+    def eto_abtew(row, k1=0.53, units_dict=None):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -1384,9 +1486,9 @@ class Lib:
         float: Estimated ET0 in mm/day.
         """
         
-        rs_mean = row['rs_mean']
-        
-        rs_mean *= 0.0864  # convert watts per square meter to megajoules per square meter 0.0288 = 60x60x8hours or 0.0864 for 24 hours
+        rs_mean = Lib.convert_rs_to_mj_m2_day(
+            row['rs_mean'], units_dict, variable_keys=('rs_mean', 'rs')
+        )
         
         lambda_v = Lib.LATENT_HEAT_OF_VAPORIZATION
         K1 = k1
@@ -1396,7 +1498,7 @@ class Lib:
         return et0
     
     @staticmethod
-    def eto_turc(row):
+    def eto_turc(row, units_dict=None):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -1412,14 +1514,25 @@ class Lib:
         """
         
         LAMBDA = 2.45
-        ta_mean_c = row['ta_mean']
-        rh_mean = row['rh_mean'] / 100
+        ta_mean_c = Lib.convert_temperature_to_celsius(
+            row['ta_mean'], units_dict, variable_keys=('ta_mean', 'ta')
+        )
+        rh_mean = Lib.convert_rh_to_percent(
+            row['rh_mean'], units_dict, variable_keys=('rh_mean', 'rh')
+        ) / 100
         rs_mean = row['rs_mean']
         
-        seconds_per_day = 43200 # 43200 for 12 hours number of seconds in a day 86400 for 24 hours
-        
-        # Conversion from W/m² to MJ/m²/day
-        rs_mj_per_m2 = (rs_mean * seconds_per_day) / 1000000  # Convert joules to Megajoules
+        # Legacy Turc path assumes W/m2 with 12h integration (43200 s).
+        # If rs unit is provided, convert to MJ/m2/day via the shared helper.
+        rs_unit = Lib.get_unit_from_dict(units_dict, 'rs', 'rs_mean', 'radiation', 'solar_radiation')
+        if rs_unit is None:
+            seconds_per_day = 43200 # 43200 for 12 hours number of seconds in a day 86400 for 24 hours
+            # Conversion from W/m² to MJ/m²/day
+            rs_mj_per_m2 = (rs_mean * seconds_per_day) / 1000000  # Convert joules to Megajoules
+        else:
+            rs_mj_per_m2 = Lib.convert_rs_to_mj_m2_day(
+                rs_mean, units_dict, variable_keys=('rs_mean', 'rs')
+            )
         
         if ta_mean_c < 0:
             et0 = 0
@@ -1432,7 +1545,7 @@ class Lib:
         return et0
     
     @staticmethod
-    def eto_mahringer(row):
+    def eto_mahringer(row, units_dict=None):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -1448,9 +1561,15 @@ class Lib:
         """
         
         LAMBDA = 2.45
-        ws_mean = row['ws_mean']
-        rh_mean = row['rh_mean'] / 100
-        ta_mean = row['ta_mean']
+        ws_mean = Lib.convert_wind_to_ms(
+            row['ws_mean'], units_dict, variable_keys=('ws_mean', 'ws')
+        )
+        rh_mean = Lib.convert_rh_to_percent(
+            row['rh_mean'], units_dict, variable_keys=('rh_mean', 'rh')
+        ) / 100
+        ta_mean = Lib.convert_temperature_to_celsius(
+            row['ta_mean'], units_dict, variable_keys=('ta_mean', 'ta')
+        )
         
         seconds_per_day = 43200 # 43200 for 12 hours number of seconds in a day 86400 for 24 hours
         
@@ -1458,7 +1577,7 @@ class Lib:
         return et0
     
     @staticmethod
-    def eto_makkink(row, c1=0.61, c2=0.12):
+    def eto_makkink(row, c1=0.61, c2=0.12, units_dict=None):
         """
         Calculate the reference evapotranspiration using the Priestley-Taylor method.
 
@@ -1474,16 +1593,17 @@ class Lib:
         """
         
         
-        rs_mean = row['rs_mean']
-        ta_mean = row['ta_mean']
+        rs_mean = Lib.convert_rs_to_mj_m2_day(
+            row['rs_mean'], units_dict, variable_keys=('rs_mean', 'rs')
+        )
+        ta_mean = Lib.convert_temperature_to_celsius(
+            row['ta_mean'], units_dict, variable_keys=('ta_mean', 'ta')
+        )
         elevation = row['elevation']
         
         delta = Lib.slope_saturation_vapor_pressure_curve(ta_mean)
         gama = Lib.psychrometric_constant(elevation, ta_mean)
         lam = Lib.latent_heat_of_vaporization(ta_mean)
-        
-        # convert units
-        rs_mean *= 0.0864  # convert watts per square meter to megajoules per square meter 0.0288 = 60x60x8hours or 0.0864 for 24 hours
         
         et0 = ((c1 * delta * rs_mean) / ((delta + gama) * lam)) - c2
         return et0
