@@ -321,6 +321,85 @@ def test_align_source_series_to_daily_target_frequency():
     assert np.isclose(aligned.iloc[0], expected)
 
 
+def test_convert_era5_rs_to_mj_m2_day_sums_joules():
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    # Accumulated SSRD in J/m2 with a typical ERA5-Land daily reset around 01:00.
+    index = pd.date_range('2020-01-01 00:00:00', periods=26, freq='h')
+    accumulated = [
+        0, 0, 0, 1000, 5000, 15000, 40000, 90000,
+        160000, 250000, 360000, 490000, 640000, 810000, 1_000_000,
+        1_210_000, 1_440_000, 1_440_000, 1_440_000, 1_440_000, 1_440_000,
+        1_440_000, 1_440_000, 1_440_000, 1_440_000, 0,
+    ]
+    ssrd = pd.Series(accumulated, index=index)
+    cf = ClimateFiller(
+        pd.DataFrame({'date': ['2020-01-01 00:00:00'], 'rs': [np.nan]}),
+        datetime_column_name='date',
+        backend='local',
+        frequency='d',
+    )
+
+    default_wm2 = cf._convert_era5_rs_series_for_target_unit(ssrd, target_unit=None, target_frequency_label='hourly')
+    assert default_wm2.index.equals(ssrd.index)
+    assert np.isclose(default_wm2.loc[pd.Timestamp('2020-01-01 04:00:00')], (5000 - 1000) / 3600.0)
+
+    mj_daily = cf._convert_era5_rs_series_for_target_unit(
+        ssrd,
+        target_unit='mj/m2/day',
+        target_frequency_label='daily',
+    )
+    # Net positive energy over 2020-01-01 from the accumulated profile.
+    expected_mj = 1_440_000 / 1_000_000.0
+    assert np.isclose(mj_daily.loc[pd.Timestamp('2020-01-01')], expected_mj, rtol=1e-6)
+
+
+def test_align_rs_with_mj_unit_sums_hourly_wm2_to_daily_mj():
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    daily_index = pd.date_range('2020-01-01 00:00:00', periods=1, freq='D')
+    # 100 W/m2 for 24 hours -> 100 * 3600 * 24 / 1e6 = 8.64 MJ/m2/day
+    source_series = pd.Series(
+        [100.0] * 24,
+        index=pd.date_range('2020-01-01 00:00:00', periods=24, freq='h'),
+    )
+    cf = ClimateFiller(
+        pd.DataFrame({'date': daily_index, 'rs': [np.nan]}),
+        datetime_column_name='date',
+        backend='local',
+        frequency='d',
+    )
+    cf._impute_unit_dict = {'rs': 'mj/m2/day'}
+
+    aligned = cf._align_source_series_to_target_frequency(
+        source_series,
+        'rs',
+        daily_index,
+        target_unit='mj/m2/day',
+    )
+    assert np.isclose(aligned.iloc[0], 8.64)
+
+
+def test_impute_accepts_unit_dict(monkeypatch):
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    df = pd.DataFrame({'date': ['2020-01-01 00:00:00'], 'rs': [np.nan], 'ta': [np.nan]})
+    cf = ClimateFiller(df, datetime_column_name='date', backend='local', frequency='d')
+
+    seen = {}
+
+    def fake_impute_single(self, column_to_fill_name='ta', **kwargs):
+        seen[column_to_fill_name] = kwargs.get('unit_dict')
+
+    monkeypatch.setattr(ClimateFiller, '_impute_single_column', fake_impute_single)
+
+    cf.impute(column_to_fill_list=['rs', 'ta'], unit_dict={'rs': 'mj/m2/day'})
+
+    assert seen['rs'] == {'rs': 'mj/m2/day'}
+    assert seen['ta'] == {'rs': 'mj/m2/day'}
+    assert cf._impute_unit_dict == {'rs': 'mj/m2/day'}
+
+
 def test_fill_from_source_series_updates_target_column_without_set_row():
     os.environ.setdefault('GEE_PROJECT', 'dummy')
 
