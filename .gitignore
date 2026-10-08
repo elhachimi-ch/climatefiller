@@ -20,3 +20,4 @@ medgu_barcelone_ml_beat_hs_magnus.ipynb
 *.json
 *.data
 *tempCodeRunnerFile.py
+*.claude
