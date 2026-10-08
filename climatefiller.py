@@ -103,11 +103,13 @@ class ClimateFiller():
 
     # ETo models that require elevation in row inputs.
     ELEVATION_REQUIRED_ETO_METHODS = frozenset({'pm', 'pt', 'mk'})
+    # ETo models that use extraterrestrial radiation, so need latitude (and longitude for hourly pm).
+    LOCATION_REQUIRED_ETO_METHODS = frozenset({'pm', 'hs', 'pt'})
     
     def __init__(self, data_path=None, datetime_column_name='datetime', 
-                 datetime_format='%Y-%m-%d %H:%M:%S', backend='gee', 
-                 lat=31.65410805, lon=-7.603140831, tz_offset=-7, elevation=None,
-                 artifact_folder='climatefiller_artifact', frequency='h', **kwargs):
+                 datetime_format='%Y-%m-%d %H:%M:%S', backend='gee',
+                 lat=None, lon=None, tz_offset=-7, elevation=None,
+                 artifact_folder='climatefiller_artifact', frequency='h', doy_column_name=None, **kwargs):
         """
         Initializes an instance of the class with the specified parameters.
 
@@ -116,9 +118,19 @@ class ClimateFiller():
             data_path (str, os.PathLike, pandas.DataFrame, or None): Path to the data source or an in-memory dataframe. Defaults to None.
             datetime_column_name (str): The name of the column that contains datetime information. Defaults to 'datetime'.
             date_time_format (str): The format of the datetime values in the data source. Defaults to '%Y-%m-%d %H:%M:%S'.
+            lat (float, str, or None): Station latitude. A string names the data's latitude column, which
+                ETo methods read row by row. A number (degrees) is used as is and written to the data as
+                a 'lat' column. None leaves it unknown. Defaults to None.
+            lon (float, str, or None): Station longitude, handled like lat with a 'lon' column.
+                Defaults to None.
             tz_offset (int): The time zone offset in hours comparint to GMT. Defaults to -7.
-            elevation (float, int, str, or None): Station elevation in meters. If a number, it is used directly.
-                If a string, it is treated as the elevation column name in the dataset. Defaults to None.
+            elevation (float, int, str, or None): Station elevation. A string names the data's
+                elevation column, which ETo methods read row by row. A number (meters) is used as is and
+                written to the data as an 'elevation' column. None looks it up from lat/lon.
+                Defaults to None.
+            doy_column_name (str or None): Name of the data's day-of-year column (values 1-366). ETo
+                methods read the day of year from it instead of deriving it from the datetime column.
+                Defaults to None.
         Returns:
             None
 
@@ -139,8 +151,12 @@ class ClimateFiller():
         self.datetime_column_name = datetime_column_name
         self.lat = lat
         self.lon = lon
+        # Column names when lat/lon are given as strings; self.lat/self.lon then hold their first values.
+        self._lat_column = lat if isinstance(lat, str) else None
+        self._lon_column = lon if isinstance(lon, str) else None
         self.tz_offset = tz_offset
         self.elevation = elevation
+        self.doy_column_name = doy_column_name
         self.backend = backend
         self.artifact_folder = artifact_folder
         self.frequency = frequency
@@ -188,6 +204,7 @@ class ClimateFiller():
             self.data.rename_columns({datetime_column_name:'datetime'})
             datetime_column_name = 'datetime'
             self._resolve_lon_lat_from_data()
+            self._check_doy_column_name()
             self._normalize_datetime_column(datetime_column_name, datetime_format)
             self.datetime_column_name = datetime_column_name
         
@@ -199,44 +216,90 @@ class ClimateFiller():
         return self.data
 
     def _resolve_lon_lat_from_data(self):
+        """
+        Settle self.lat/self.lon/self.elevation against the loaded data.
+
+        - column name: the data has this column; it must hold numbers. lat/lon take its
+          first value, elevation keeps the name (ETo methods read these columns row by row)
+        - number: used as is and written to the data as a 'lat'/'lon'/'elevation' column
+        - None: no column is assumed (lat/lon unknown, elevation looked up from lat/lon)
+        """
         dataframe = self._get_underlying_dataframe()
         if dataframe is None:
             return
 
-        if isinstance(self.lon, str):
-            lon_value = dataframe[self.lon] if self.lon in dataframe.columns else None
-            if lon_value is not None and not lon_value.empty:
-                if pd.api.types.is_numeric_dtype(lon_value):
-                    self.lon = float(lon_value.iloc[0])
-                else:
-                    resolved = pd.to_numeric(lon_value, errors='coerce')
-                    if not resolved.dropna().empty:
-                        self.lon = float(resolved.dropna().iloc[0])
-
-        if isinstance(self.lat, str):
-            lat_value = dataframe[self.lat] if self.lat in dataframe.columns else None
-            if lat_value is not None and not lat_value.empty:
-                if pd.api.types.is_numeric_dtype(lat_value):
-                    self.lat = float(lat_value.iloc[0])
-                else:
-                    resolved = pd.to_numeric(lat_value, errors='coerce')
-                    if not resolved.dropna().empty:
-                        self.lat = float(resolved.dropna().iloc[0])
-
-        if isinstance(self.elevation, str):
-            if self.elevation not in dataframe.columns:
-                raise ValueError(
-                    f"Elevation column '{self.elevation}' was not found. "
-                    f"Available columns: {list(dataframe.columns)}"
+        for attribute, label, unit in (
+            ('lat', 'Latitude', 'degrees'),
+            ('lon', 'Longitude', 'degrees'),
+            ('elevation', 'Elevation', 'meters'),
+        ):
+            value = getattr(self, attribute)
+            if value is not None and not isinstance(value, (str, int, float, np.number)):
+                raise TypeError(
+                    f"{attribute} must be a number ({unit}), a column name string, or None. "
+                    f"Got type {type(value).__name__}."
                 )
-            # Keep the column name; values are resolved when ETo methods need elevation.
-        elif self.elevation is not None and not isinstance(self.elevation, (int, float, np.number)):
+
+            if isinstance(value, str):
+                if value not in dataframe.columns:
+                    raise ValueError(
+                        f"{label} column '{value}' was not found. "
+                        f"Available columns: {list(dataframe.columns)}"
+                    )
+                column_values = pd.to_numeric(dataframe[value], errors='coerce').dropna()
+                if column_values.empty:
+                    raise ValueError(f"{label} column '{value}' does not contain numeric values.")
+                if attribute != 'elevation':
+                    setattr(self, attribute, float(column_values.iloc[0]))
+            elif value is not None:
+                number = float(value)
+                if attribute in dataframe.columns:
+                    existing_values = pd.to_numeric(dataframe[attribute], errors='coerce').dropna()
+                    if not existing_values.empty and not np.allclose(existing_values, number):
+                        LOGGER.warning(
+                            "%s=%s replaces the data's '%s' column (first value %s); "
+                            "pass %s='%s' to use the column instead.",
+                            attribute,
+                            value,
+                            attribute,
+                            existing_values.iloc[0],
+                            attribute,
+                            attribute,
+                        )
+                self.data.add_one_value_column(attribute, number)
+                setattr(self, attribute, number)
+
+    def _check_doy_column_name(self):
+        """Fail early when doy_column_name does not name a day-of-year column of the data."""
+        if self.doy_column_name is None:
+            return
+        if not isinstance(self.doy_column_name, str):
             raise TypeError(
-                "elevation must be a number (meters), a column name string, or None. "
-                f"Got type {type(self.elevation).__name__}."
+                "doy_column_name must be a column name string or None. "
+                f"Got type {type(self.doy_column_name).__name__}."
             )
-        elif isinstance(self.elevation, (int, float, np.number)):
-            self.elevation = float(self.elevation)
+        dataframe = self._get_underlying_dataframe()
+        if self.doy_column_name not in dataframe.columns:
+            raise ValueError(
+                f"Day-of-year column '{self.doy_column_name}' was not found. "
+                f"Available columns: {list(dataframe.columns)}"
+            )
+        values = pd.to_numeric(dataframe[self.doy_column_name], errors='coerce').dropna()
+        if values.empty or not values.between(1, 366).all():
+            raise ValueError(f"Day-of-year column '{self.doy_column_name}' must hold values from 1 to 366.")
+
+    @staticmethod
+    def _require_coordinates(purpose, **coordinates):
+        """Raise a clear error when a coordinate needed for purpose is unknown (None)."""
+        missing = [name for name, value in coordinates.items() if value is None]
+        if missing:
+            arguments = ', '.join(f"{name}=" for name in missing)
+            several = len(missing) > 1
+            raise ValueError(
+                f"{purpose} needs {' and '.join(missing)}: pass {arguments} to ClimateFiller, "
+                f"as {'numbers' if several else 'a number'} or as the name{'s' if several else ''} "
+                f"of the data's column{'s' if several else ''} (e.g. {missing[0]}='{missing[0]}')."
+            )
 
     def _get_numeric_elevation(self):
         """
@@ -263,6 +326,7 @@ class ClimateFiller():
             return float(elev_series.iloc[0])
 
         if self.elevation is None:
+            self._require_coordinates('Looking up elevation (elevation=None)', lat=self.lat, lon=self.lon)
             return Lib.get_elevation(self.lat, self.lon)
 
         raise TypeError(
@@ -270,42 +334,38 @@ class ClimateFiller():
             f"Got type {type(self.elevation).__name__}."
         )
 
-    def _add_elevation_column(self, target):
+    def _add_elevation_column(self, target, source=None):
         """
         Attach elevation to an ETo working dataframe.
 
+        - string: that column of the in-situ data, gaps filled with its first valid value
         - number: constant elevation value
-        - string: elevation column from in-situ data
         - None: fetch elevation from coordinates (Lib.get_elevation)
+
+        source defaults to the in-situ data and must share target's index (pass the daily
+        resample when target is daily).
         """
+        if isinstance(self.elevation, str):
+            if source is None:
+                source = self._get_underlying_dataframe()
+            if source is None or self.elevation not in source.columns:
+                raise ValueError(
+                    f"Elevation column '{self.elevation}' was not found. "
+                    f"Available columns: {list(source.columns) if source is not None else []}"
+                )
+            values = pd.to_numeric(source[self.elevation], errors='coerce')
+            valid_values = values.dropna()
+            if valid_values.empty:
+                raise ValueError(f"Elevation column '{self.elevation}' does not contain numeric values.")
+            target.add_column('elevation', values.fillna(valid_values.iloc[0]))
+            return
+
         if isinstance(self.elevation, (int, float, np.number)):
             target.add_one_value_column('elevation', float(self.elevation))
             return
 
-        if isinstance(self.elevation, str):
-            source_df = self._get_underlying_dataframe()
-            if source_df is None or self.elevation not in source_df.columns:
-                raise ValueError(
-                    f"Elevation column '{self.elevation}' was not found. "
-                    f"Available columns: {list(source_df.columns) if source_df is not None else []}"
-                )
-
-            elev_series = pd.to_numeric(source_df[self.elevation], errors='coerce')
-            target_df = target.get_dataframe()
-            aligned = elev_series.reindex(target_df.index)
-
-            if aligned.notna().any():
-                fill_value = elev_series.dropna().iloc[0] if not elev_series.dropna().empty else np.nan
-                if aligned.isna().any() and pd.notna(fill_value):
-                    aligned = aligned.fillna(fill_value)
-                target.add_column('elevation', aligned)
-            else:
-                if elev_series.dropna().empty:
-                    raise ValueError(f"Elevation column '{self.elevation}' does not contain numeric values.")
-                target.add_one_value_column('elevation', float(elev_series.dropna().iloc[0]))
-            return
-
         if self.elevation is None:
+            self._require_coordinates('Looking up elevation (elevation=None)', lat=self.lat, lon=self.lon)
             target.add_one_value_column('elevation', Lib.get_elevation(self.lat, self.lon))
             return
 
@@ -325,6 +385,48 @@ class ClimateFiller():
         """
         if self._eto_method_requires_elevation(method):
             self._add_elevation_column(target)
+
+    def _add_lat_lon_columns(self, target, methods, source=None, hourly=False):
+        """
+        Attach lat/lon to an ETo working dataframe as 'lat'/'lon' columns.
+
+        - lat/lon given as column names: those columns of source, gaps filled with the
+          first valid value
+        - otherwise: constant self.lat / self.lon
+        - unknown: left out, or an error when a method needs it (latitude for Ra in
+          pm/hs/pt, longitude too for hourly pm)
+
+        source defaults to the in-situ data and must share target's index
+        (pass the daily resample when target is daily).
+        """
+        if source is None:
+            source = self._get_underlying_dataframe()
+
+        resolved = {}
+        for name, constant_value, source_column in (
+            ('lat', self.lat, self._lat_column),
+            ('lon', self.lon, self._lon_column),
+        ):
+            resolved[name] = constant_value
+            if source_column is not None and source is not None and source_column in source.columns:
+                values = pd.to_numeric(source[source_column], errors='coerce')
+                valid_values = values.dropna()
+                if not valid_values.empty:
+                    resolved[name] = values.fillna(valid_values.iloc[0])
+
+        required = ()
+        if any(str(method).lower().strip() in self.LOCATION_REQUIRED_ETO_METHODS for method in methods):
+            required = ('lat', 'lon') if hourly else ('lat',)
+        self._require_coordinates(
+            f"ETo ({', '.join(methods)})",
+            **{name: resolved[name] for name in required},
+        )
+
+        for column_name, value in resolved.items():
+            if isinstance(value, pd.Series):
+                target.add_column(column_name, value)
+            elif value is not None:
+                target.add_one_value_column(column_name, value)
 
     def _normalize_datetime_column(self, column_name, datetime_format='%Y-%m-%d %H:%M:%S'):
         dataframe = self._get_underlying_dataframe().copy()
@@ -1872,12 +1974,13 @@ class ClimateFiller():
                 datetime_column_name=detected_datetime_column,
                 datetime_format=datetime_format,
                 backend=self.backend,
-                lat=self.lat,
-                lon=self.lon,
+                lat=self._lat_column or self.lat,
+                lon=self._lon_column or self.lon,
                 tz_offset=self.tz_offset,
                 elevation=self.elevation,
                 artifact_folder=self.artifact_folder,
                 frequency=self.frequency,
+                doy_column_name=self.doy_column_name,
             )
             imputer.impute(
                 column_to_fill_list=column_to_fill_list,
@@ -1973,13 +2076,15 @@ class ClimateFiller():
             crs = source_crs or 'EPSG:4326'
 
         # If class-level lon/lat are provided as column names, prioritize them.
-        if lon_column is None and isinstance(self.lon, str):
-            lon_key = self.lon.lower()
+        class_lon_column = self._lon_column or (self.lon if isinstance(self.lon, str) else None)
+        if lon_column is None and class_lon_column is not None:
+            lon_key = class_lon_column.lower()
             if lon_key in lower_to_original:
                 lon_column = lower_to_original[lon_key]
 
-        if lat_column is None and isinstance(self.lat, str):
-            lat_key = self.lat.lower()
+        class_lat_column = self._lat_column or (self.lat if isinstance(self.lat, str) else None)
+        if lat_column is None and class_lat_column is not None:
+            lat_key = class_lat_column.lower()
             if lat_key in lower_to_original:
                 lat_column = lower_to_original[lat_key]
 
@@ -2234,6 +2339,10 @@ class ClimateFiller():
                 missing_percent,
             )
         )
+        if missing_count > 0:
+            self._require_coordinates(
+                f"Imputing '{target_column_to_fill_name}' from {product}", lat=lat, lon=lon
+            )
 
         if self.backend == 'gee':
             if missing_count == 0:
@@ -3282,19 +3391,106 @@ class ClimateFiller():
         self.data.get_column(column).plot()
         plt.show()
         
-    def extraterrestrial_radiation_daily(self, column_name='ra', nbr_decimal_places=None):
+    def add_extraterrestrial_radiation_daily_column(
+        self,
+        column_name='ra',
+        nbr_decimal_places=None,
+        lat_column_name=None,
+        doy_column_name=None,
+        datetime_column_name=None,
+    ):
+        """Add daily extraterrestrial radiation (Ra) to the climate data.
+
+        Ra is calculated for each record using
+        :meth:`Lib.extraterrestrial_radiation_daily`. Supply either an
+        existing day-of-year column or a datetime column from which to derive
+        it. When neither is supplied, the instance ``doy_column_name`` is used,
+        or else the instance datetime column.
+        Latitude comes from ``lat_column_name`` when provided, otherwise from
+        the instance latitude (its column when ``lat`` was given as a column name).
+
+        Parameters
+        ----------
+        column_name : str, default='ra'
+            Name of the output column.
+        nbr_decimal_places : int or None, default=None
+            If provided, round the calculated values to this many decimal
+            places.
+        lat_column_name : str or None, default=None
+            Name of an existing latitude column. If omitted, use the instance
+            latitude: the column named by ``lat``, or its numeric value.
+        doy_column_name : str or None, default=None
+            Name of an existing day-of-year column. Mutually exclusive with
+            ``datetime_column_name``.
+        datetime_column_name : str or None, default=None
+            Name of a datetime column from which to derive day of year.
+            When both this and ``doy_column_name`` are omitted,
+            ``self.doy_column_name`` is used, or else ``self.datetime_column_name``.
+
+        Returns
+        -------
+        None
+        """
+        if doy_column_name is not None and datetime_column_name is not None:
+            raise ValueError(
+                "Provide either doy_column_name or datetime_column_name, not both."
+            )
+
         self.data.index_to_column()
-        self.data.add_doy_column(datetime_column_name=self.datetime_column_name)
-        self.data.add_one_value_column('lat', self.lat)
+        latitude_column = lat_column_name or self._lat_column or 'lat'
+        if lat_column_name is None and self._lat_column is None:
+            self._require_coordinates('Extraterrestrial radiation', lat=self.lat)
+            self.data.add_one_value_column(latitude_column, self.lat)
+        elif latitude_column not in self.data.get_columns_names():
+            raise KeyError(f"Latitude column '{latitude_column}' was not found.")
+
+        day_of_year_column = doy_column_name
+        if day_of_year_column is None and datetime_column_name is None:
+            day_of_year_column = self.doy_column_name
+        if day_of_year_column is None:
+            date_column = datetime_column_name or self.datetime_column_name
+            if date_column not in self.data.get_columns_names():
+                raise KeyError(f"Datetime column '{date_column}' was not found.")
+
+            def get_day_of_year(row):
+                return pd.Timestamp(row[date_column]).dayofyear
+
+        else:
+            if day_of_year_column not in self.data.get_columns_names():
+                raise KeyError(f"Day-of-year column '{day_of_year_column}' was not found.")
+
+            def get_day_of_year(row):
+                return row[day_of_year_column]
+
         self.data.add_column_based_on_function(
-            column_name, 
+            column_name,
             lambda row: Lib.extraterrestrial_radiation_daily(
-                    row['lat'],
-                    row['doy'])
+                row[latitude_column],
+                get_day_of_year(row),
+            ),
         )
         if nbr_decimal_places is not None:
             self.data.transform_column(column_name, lambda o: round(o, nbr_decimal_places))
         self.data.reindex_dataframe(self.datetime_column_name)
+
+    def extraterrestrial_radiation_daily(
+        self,
+        column_name='ra',
+        nbr_decimal_places=None,
+        lat_column_name=None,
+        doy_column_name=None,
+        datetime_column_name=None,
+    ):
+        """Backward-compatible alias for
+        :meth:`add_extraterrestrial_radiation_daily_column`.
+        """
+        return self.add_extraterrestrial_radiation_daily_column(
+            column_name=column_name,
+            nbr_decimal_places=nbr_decimal_places,
+            lat_column_name=lat_column_name,
+            doy_column_name=doy_column_name,
+            datetime_column_name=datetime_column_name,
+        )
     
     def eto_estimation(self, 
                        ta_column_name='ta',
@@ -3310,6 +3506,7 @@ class ClimateFiller():
                        b_hs=0.5,
                        k1_ab=0.53,
                        alpha_pt=1.26,
+                       units_dict=None,
                        ):
         """
         Estimates reference evapotranspiration (ETo) using the specified meteorological data and method(s).
@@ -3328,10 +3525,44 @@ class ClimateFiller():
             c_hs, a_hs, b_hs: Hargreaves-Samani coefficients.
             k1_ab: Abtew coefficient.
             alpha_pt: Priestley-Taylor coefficient.
+            units_dict (dict or None): Optional units of the input columns. Keys may be short names
+                ('ta', 'rh', 'ws', 'rs'), the column names passed above (e.g. 't2m'), or daily
+                names (e.g. 'rs_mean'). When a variable's unit is omitted, the legacy conversion
+                path is kept (rs treated as W/m2). When provided, values are converted to FAO-56
+                targets: ta °C, rh %, ws m/s, rs MJ/m2/day (MJ/m2/h for freq='h').
+                Give the unit of the input column: with freq='d' the daily mean is converted, so
+                hourly rs in MJ/m2 per hour is 'MJ/m2/h', not 'MJ/m2/day'.
+                Example: {'rs': 'MJ/m2/day'} skips the W/m2->MJ/m2/day conversion for daily rows.
 
         Returns:
             pandas.DataFrame: Dataframe with ETo column(s) and supporting columns.
+
+        Notes:
+            lat, lon and elevation given to ClimateFiller as column names are read from those
+            columns (daily medians for freq='d'); numbers are used as constants. pm, hs and pt
+            need latitude (hourly pm also longitude) and raise when it is unknown. The day of
+            year comes from doy_column_name when set, otherwise from the datetime.
         """
+        if units_dict is None:
+            units_dict = {}
+        elif not isinstance(units_dict, dict):
+            raise TypeError(
+                "units_dict must be a dict of variable->unit or None. "
+                f"Got type {type(units_dict).__name__}."
+            )
+        # Daily Lib methods look units up by short name only; map column-name keys
+        # (e.g. {'t2m': 'K'} with ta_column_name='t2m') so both freqs accept them.
+        units_dict = dict(units_dict)
+        for short_name, source_column_name in (
+            ('ta', ta_column_name),
+            ('rs', rs_column_name),
+            ('rh', rh_column_name),
+            ('ws', ws_column_name),
+        ):
+            source_unit = Lib.get_unit_from_dict(units_dict, source_column_name)
+            if source_unit is not None and Lib.get_unit_from_dict(units_dict, short_name) is None:
+                units_dict[short_name] = source_unit
+
         if methods_list is None:
             methods_list = ['pm']
         elif isinstance(methods_list, str):
@@ -3363,13 +3594,19 @@ class ClimateFiller():
             data_temp.add_column('ta_min', self.data.resample_timeseries(in_place=False, agg='min')[ta_column_name], )
             
             data_temp.index_to_column()
-            data_temp.add_doy_column(datetime_column_name=self.datetime_column_name)
-            data_temp.add_one_value_column('lat', self.lat)
-            data_temp.add_one_value_column('lon', self.lon)
+            if self.doy_column_name is None:
+                data_temp.add_doy_column(datetime_column_name=self.datetime_column_name)
             data_temp.reindex_dataframe(self.datetime_column_name)
+            # Median, not mean: it returns a constant station coordinate/elevation/doy exactly.
+            daily_station_values = self.data.resample_timeseries(in_place=False, agg='median')
+            if self.doy_column_name is not None:
+                data_temp.add_column(
+                    'doy', pd.to_numeric(daily_station_values[self.doy_column_name], errors='coerce')
+                )
+            self._add_lat_lon_columns(data_temp, methods, source=daily_station_values)
 
             if any(self._eto_method_requires_elevation(method) for method in methods):
-                self._add_elevation_column(data_temp)
+                self._add_elevation_column(data_temp, source=daily_station_values)
 
             needs_rh_max = any(m in {'pm', 'pt'} for m in methods)
             needs_rh_min = any(m in {'pm', 'pt'} for m in methods)
@@ -3393,36 +3630,49 @@ class ClimateFiller():
                 if method == 'pm':
                     data_temp.add_column_based_on_function(
                         output_column,
-                        lambda row: Lib.eto_penman_monteith_daily(row),
+                        lambda row, ud=units_dict: Lib.eto_penman_monteith_daily(row, units_dict=ud),
                     )
                     data_temp.transform_column(output_column, lambda o: o if o > 0 else 0)
                     data_temp.transform_column(output_column, lambda o: round(o, nbr_decimal_places))
                 elif method == 'hs':
                     data_temp.add_column_based_on_function(
                         output_column,
-                        lambda row, c=c_hs, a=a_hs, b=b_hs: Lib.eto_hargreaves_samani(row, c=c, a=a, b=b),
+                        lambda row, c=c_hs, a=a_hs, b=b_hs, ud=units_dict: Lib.eto_hargreaves_samani(
+                            row, c=c, a=a, b=b, units_dict=ud
+                        ),
                     )
                     data_temp.transform_column(output_column, lambda o: o if o > 0 else 0)
                     data_temp.transform_column(output_column, lambda o: round(o, nbr_decimal_places))
                 elif method == 'pt':
                     data_temp.add_column_based_on_function(
                         output_column,
-                        lambda row, alpha=alpha_pt: Lib.eto_priestley_taylor_daily(row, alpha),
+                        lambda row, alpha=alpha_pt, ud=units_dict: Lib.eto_priestley_taylor_daily(
+                            row, alpha, units_dict=ud
+                        ),
                     )
                     data_temp.transform_column(output_column, lambda o: o if o > 0 else 0)
                     data_temp.transform_column(output_column, lambda o: round(o, nbr_decimal_places))
                 elif method == 'sd':
-                    data_temp.add_column_based_on_function(output_column, Lib.eto_schendel)
+                    data_temp.add_column_based_on_function(
+                        output_column,
+                        lambda row, ud=units_dict: Lib.eto_schendel(row, units_dict=ud),
+                    )
                 elif method == 'ab':
                     data_temp.add_column_based_on_function(
                         output_column,
-                        lambda row, k1=k1_ab: Lib.eto_abtew(row, k1=k1),
+                        lambda row, k1=k1_ab, ud=units_dict: Lib.eto_abtew(row, k1=k1, units_dict=ud),
                     )
                     data_temp.transform_column(output_column, lambda o: round(o, nbr_decimal_places))
                 elif method == 'tu':
-                    data_temp.add_column_based_on_function(output_column, Lib.eto_turc)
+                    data_temp.add_column_based_on_function(
+                        output_column,
+                        lambda row, ud=units_dict: Lib.eto_turc(row, units_dict=ud),
+                    )
                 elif method == 'mk':
-                    data_temp.add_column_based_on_function(output_column, Lib.eto_makkink)
+                    data_temp.add_column_based_on_function(
+                        output_column,
+                        lambda row, ud=units_dict: Lib.eto_makkink(row, units_dict=ud),
+                    )
                     data_temp.transform_column(output_column, lambda o: o if o > 0 else 0)
                     data_temp.transform_column(output_column, lambda o: round(o, nbr_decimal_places))
             
@@ -3432,23 +3682,28 @@ class ClimateFiller():
             self.eto_output_data.dataframe = self.data.dataframe.copy()
             self.eto_output_data.transform_column(rs_column_name, lambda o: o if o > 0 else 0)
             self.eto_output_data.index_to_column()
-            self.eto_output_data.add_doy_column(datetime_column_name=self.datetime_column_name)
+            if self.doy_column_name is None:
+                self.eto_output_data.add_doy_column(datetime_column_name=self.datetime_column_name)
+            else:
+                self.eto_output_data.add_column(
+                    'doy',
+                    pd.to_numeric(self.eto_output_data.get_dataframe()[self.doy_column_name], errors='coerce'),
+                )
             self.eto_output_data.add_hod_column(datetime_column_name=self.datetime_column_name)
             self.eto_output_data.transform_column('hod', lambda o: o + 1)
             self.eto_output_data.reindex_dataframe(self.datetime_column_name)
             
             if any(self._eto_method_requires_elevation(method) for method in methods):
                 self._add_elevation_column(self.eto_output_data)
-                
-            self.eto_output_data.add_one_value_column('lat', self.lat)
-            self.eto_output_data.add_one_value_column('lon', self.lon)
+
+            self._add_lat_lon_columns(self.eto_output_data, methods, hourly=True)
 
             for method in methods:
                 output_column = f'eto_{method}'
                 if method == 'pm':
                     self.eto_output_data.add_column_based_on_function(
                         output_column,
-                        lambda row: Lib.eto_penman_monteith_hourly(
+                        lambda row, ud=units_dict: Lib.eto_penman_monteith_hourly(
                             row,
                             ta_column_name,
                             rs_column_name,
@@ -3456,6 +3711,7 @@ class ClimateFiller():
                             ws_column_name,
                             self.tz_offset,
                             reference_crop,
+                            units_dict=ud,
                         ),
                     )
                     self.eto_output_data.transform_column(output_column, lambda o: o if o > 0 else 0)
@@ -3475,17 +3731,23 @@ class ClimateFiller():
                 elif method == 'ab':
                     self.eto_output_data.add_column_based_on_function(
                         output_column,
-                        lambda row: Lib.eto_priestley_taylor_hourly(row, ta_column_name, rs_column_name),
+                        lambda row, ud=units_dict: Lib.eto_priestley_taylor_hourly(
+                            row, ta_column_name, rs_column_name, units_dict=ud
+                        ),
                     )
                 elif method == 'tu':
                     self.eto_output_data.add_column_based_on_function(
                         output_column,
-                        lambda row: Lib.eto_priestley_taylor_hourly(row, ta_column_name, rs_column_name),
+                        lambda row, ud=units_dict: Lib.eto_priestley_taylor_hourly(
+                            row, ta_column_name, rs_column_name, units_dict=ud
+                        ),
                     )
                 elif method == 'sd':
                     self.eto_output_data.add_column_based_on_function(
                         output_column,
-                        lambda row: Lib.eto_priestley_taylor_hourly(row, ta_column_name, rs_column_name),
+                        lambda row, ud=units_dict: Lib.eto_priestley_taylor_hourly(
+                            row, ta_column_name, rs_column_name, units_dict=ud
+                        ),
                     )
                 elif method in {'hs', 'mk'}:
                     raise ValueError(
@@ -3512,6 +3774,7 @@ class ClimateFiller():
         b_hs=0.5,
         k1_ab=0.53,
         alpha_pt=1.26,
+        units_dict=None,
         prefix=None,
         datetime_format='%Y-%m-%d %H:%M:%S',
     ):
@@ -3532,6 +3795,7 @@ class ClimateFiller():
             reference_crop (str): Reference crop for hourly PM/PT methods.
             nbr_decimal_places (int): Rounding precision for ETo outputs.
             c_hs, a_hs, b_hs, k1_ab, alpha_pt: Model coefficients.
+            units_dict (dict or None): Optional variable units forwarded to eto_estimation().
             prefix (str or None): If provided, process only files that start with prefix.
             datetime_format (str): Datetime parsing format for per-file initialization.
 
@@ -3542,6 +3806,8 @@ class ClimateFiller():
             - Output files keep the same filename/extension as the source files.
             - GeoParquet/parquet sources with CRS are exported as GeoParquet with the same CRS.
             - Exported content comes from eto_output_data (including datetime).
+            - lat/lon/elevation and doy_column_name given as column names are read from each
+              file's columns; numbers apply to every file.
         """
         if not os.path.isdir(input_folder):
             raise ValueError(f"input_folder does not exist: {input_folder}")
@@ -3610,12 +3876,13 @@ class ClimateFiller():
                 datetime_column_name=detected_datetime_column,
                 datetime_format=datetime_format,
                 backend=self.backend,
-                lat=self.lat,
-                lon=self.lon,
+                lat=self._lat_column or self.lat,
+                lon=self._lon_column or self.lon,
                 tz_offset=self.tz_offset,
                 elevation=self.elevation,
                 artifact_folder=self.artifact_folder,
                 frequency=self.frequency or freq,
+                doy_column_name=self.doy_column_name,
             )
             if source_crs is not None:
                 estimator._source_crs = source_crs
@@ -3634,6 +3901,7 @@ class ClimateFiller():
                 b_hs=b_hs,
                 k1_ab=k1_ab,
                 alpha_pt=alpha_pt,
+                units_dict=units_dict,
             )
 
             export_df = estimator.eto_output_data.get_dataframe().copy()
@@ -3734,6 +4002,11 @@ class ClimateFiller():
             - ab: rs_mean
             - tu: ta_mean, rh_mean, rs_mean
             - mk: ta_mean, rs_mean (+ elevation)
+
+            lat, lon and elevation given to ClimateFiller as column names are read from those
+            columns; numbers are used as constants. pm, hs and pt need latitude and raise when
+            it is unknown. The day of year comes from doy_column_name when set, otherwise from
+            the datetime.
         """
         if units_dict is None:
             units_dict = {}
@@ -3830,10 +4103,12 @@ class ClimateFiller():
         data_temp = DataFrame()
         data_temp.set_dataframe(working_df)
         data_temp.index_to_column()
-        data_temp.add_doy_column(datetime_column_name=self.datetime_column_name)
-        data_temp.add_one_value_column('lat', self.lat)
-        data_temp.add_one_value_column('lon', self.lon)
+        if self.doy_column_name is None:
+            data_temp.add_doy_column(datetime_column_name=self.datetime_column_name)
         data_temp.reindex_dataframe(self.datetime_column_name)
+        if self.doy_column_name is not None:
+            data_temp.add_column('doy', pd.to_numeric(source_df[self.doy_column_name], errors='coerce'))
+        self._add_lat_lon_columns(data_temp, methods)
 
         # Elevation once if any selected method needs it.
         if any(self._eto_method_requires_elevation(method) for method in methods):
@@ -4006,12 +4281,13 @@ class ClimateFiller():
                 datetime_column_name=detected_datetime_column,
                 datetime_format=datetime_format,
                 backend=self.backend,
-                lat=self.lat,
-                lon=self.lon,
+                lat=self._lat_column or self.lat,
+                lon=self._lon_column or self.lon,
                 tz_offset=self.tz_offset,
                 elevation=self.elevation,
                 artifact_folder=self.artifact_folder,
                 frequency=self.frequency or 'd',
+                doy_column_name=self.doy_column_name,
             )
             if source_crs is not None:
                 estimator._source_crs = source_crs
@@ -4189,10 +4465,11 @@ class ClimateFiller():
             - The downloaded data can be used for further analysis, processing, or visualization.
             - The availability of data and the chosen backend may affect the success of the download process.
         """
-        
+        self._require_coordinates(f"Downloading '{variable}' from {product}", lat=self.lat, lon=self.lon)
+
         self.check_directory_existance('data')
         self.check_directory_existance('data/cache')
-        
+
         if product == 'era5_land':
             # Convert the start date and end date to datetime objects
             if not isinstance(start_date, datetime.datetime) and not isinstance(end_date, datetime.datetime):
@@ -4586,14 +4863,26 @@ class ClimateFiller():
             df = self.data.get_dataframe().copy()
             lon_column = kwargs.pop('lon_column', None)
             lat_column = kwargs.pop('lat_column', None)
-            gdf = self._build_geodataframe_from_dataframe(
-                df,
-                lon_column=lon_column,
-                lat_column=lat_column,
-                crs=crs,
-            )
-
             extension = os.path.splitext(path_link)[1].lower()
+            try:
+                gdf = self._build_geodataframe_from_dataframe(
+                    df,
+                    lon_column=lon_column,
+                    lat_column=lat_column,
+                    crs=crs,
+                )
+            except ValueError:
+                # Raised only when no lon/lat is known; parquet/json still make sense as a plain table.
+                if extension not in ('.parquet', '.pq', '.pqt', '.json'):
+                    raise
+                LOGGER.warning("lon/lat unknown: writing %s as a plain table without geometry.", path_link)
+                if extension == '.json':
+                    df.to_json(path_link, date_format='iso')
+                else:
+                    df.to_parquet(path_link, index=kwargs.get('index', True))
+                print(f"Exported file: {os.path.abspath(path_link)}")
+                return None
+
             if extension in ('.parquet', '.geoparquet', '.pq', '.pqt'):
                 gdf.to_parquet(path_link, index=kwargs.pop('index', False))
             elif extension in ('.geojson', '.json'):
@@ -4731,6 +5020,7 @@ class ClimateFiller():
 
     @_with_gee_project_failover
     def download_era5_land_data_by_years(self, variables, start_date, end_date):
+        self._require_coordinates('Downloading ERA5-Land', lat=self.lat, lon=self.lon)
         self.check_directory_existance('data')
         self.check_directory_existance('data/cache')
 
