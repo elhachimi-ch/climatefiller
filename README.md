@@ -72,6 +72,15 @@ earthengine authenticate
 ```
 Follow the instructions to authorize the Earth Engine API with your Google account. This method, enables you access the API without having to request authorization every time.
 
+To use multiple Cloud projects, set a comma-separated pool in the `.env` file:
+
+```bash
+EE_PROJECT_POOL=project-one,project-two
+```
+
+`ClimateFiller` selects a project when initialized and rotates to another configured
+project after project-specific quota or restricted-mode failures. Existing single-project
+settings (`GEE_PROJECT`, `EE_PROJECT`, or `GOOGLE_EARTH_ENGINE_PROJECT`) remain supported.
 
 
 

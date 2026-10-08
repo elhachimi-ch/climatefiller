@@ -920,6 +920,44 @@ class Lib:
         return elevation
     
     @staticmethod
+    def wind_speed_z_source_to_z_target(wind_speed, z_source=10, z_target=2, z0=0.03):
+        """
+        Convert wind speed measured at one height to another using the log profile.
+
+        Parameters:
+        wind_speed (float, pandas.Series, numpy.ndarray, or sequence): Wind speed(s)
+            at z_source in m/s.
+        z_source (float): Measurement height in meters. Defaults to 10.
+        z_target (float): Target height in meters. Defaults to 2.
+        z0 (float): Surface roughness length in meters. Defaults to 0.03.
+
+        Returns:
+        float, pandas.Series, or numpy.ndarray: Wind speed at z_target in m/s.
+
+        Notes:
+        The neutral logarithmic wind profile is assumed, with zero displacement
+        height. Both measurement heights must be above the roughness length.
+        """
+        try:
+            z_source = float(z_source)
+            z_target = float(z_target)
+            z0 = float(z0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("z_source, z_target, and z0 must be finite numbers.") from exc
+
+        if not all(math.isfinite(height) for height in (z_source, z_target, z0)):
+            raise ValueError("z_source, z_target, and z0 must be finite numbers.")
+        if z0 <= 0 or z_source <= z0 or z_target <= z0:
+            raise ValueError(
+                "z_source and z_target must both be greater than the positive roughness length z0."
+            )
+
+        adjustment = math.log(z_target / z0) / math.log(z_source / z0)
+        if isinstance(wind_speed, (list, tuple)):
+            wind_speed = np.asarray(wind_speed)
+        return wind_speed * adjustment
+
+    @staticmethod
     def logarithmic_wind_profile(u, v, z_source=10, z_target=2, z0=0.03):
         """
         Calculate wind speed at 2 meters given wind speed components at 10 meters.
@@ -944,10 +982,12 @@ class Lib:
         # Calculate wind speed at the source height (10 meters)
         wind_speed_source = math.sqrt(u**2 + v**2)
         
-        # Calculate wind speed at the target height (2 meters) using the logarithmic wind profile
-        wind_speed_target = wind_speed_source * (math.log(z_target / z0) / math.log(z_source / z0))
-        
-        return wind_speed_target
+        return Lib.wind_speed_z_source_to_z_target(
+            wind_speed_source,
+            z_source=z_source,
+            z_target=z_target,
+            z0=z0,
+        )
     
     @staticmethod    
     def relative_humidity_magnus(ta_c, dew_point_c):

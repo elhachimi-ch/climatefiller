@@ -1,10 +1,14 @@
 from data_science_toolkit.model import Model
 from data_science_toolkit.dataframe import DataFrame
 import datetime
+import functools
 import json
 import logging
 import os
+import random
+import threading
 import time
+import warnings
 from datetime import timedelta
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -30,6 +34,64 @@ from tqdm import tqdm
 LOGGER = logging.getLogger(__name__)
 if not LOGGER.handlers:
     logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+
+
+_GEE_FAILOVER_LOCAL = threading.local()
+
+
+def _with_gee_project_failover(method):
+    @functools.wraps(method)
+    def wrapped(self, *args, **kwargs):
+        if getattr(self, 'backend', None) != 'gee' or not getattr(self, '_gee_projects', None):
+            return method(self, *args, **kwargs)
+
+        active_instances = getattr(_GEE_FAILOVER_LOCAL, 'active_instances', set())
+        instance_id = id(self)
+        if instance_id in active_instances:
+            return method(self, *args, **kwargs)
+
+        active_instances.add(instance_id)
+        _GEE_FAILOVER_LOCAL.active_instances = active_instances
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    'error',
+                    message=r'(?i).*(restricted|non.?commercial).*',
+                    category=UserWarning,
+                )
+                try:
+                    return method(self, *args, **kwargs)
+                except Exception as exc:
+                    if not self._is_gee_project_failure(exc):
+                        raise
+                    if len(self._gee_projects) == 1:
+                        raise
+                    last_error = exc
+
+                project_count = len(self._gee_projects)
+                current_index = self._gee_project_index
+                for offset in range(1, project_count):
+                    project_index = (current_index + offset) % project_count
+                    try:
+                        self._initialize_gee_project(project_index)
+                    except Exception as exc:
+                        last_error = exc
+                        continue
+
+                    try:
+                        return method(self, *args, **kwargs)
+                    except Exception as exc:
+                        if not self._is_gee_project_failure(exc):
+                            raise
+                        last_error = exc
+
+                raise RuntimeError(
+                    f"{method.__name__} failed with all configured Earth Engine projects."
+                ) from last_error
+        finally:
+            active_instances.remove(instance_id)
+
+    return wrapped
 
 
 
@@ -67,6 +129,8 @@ class ClimateFiller():
             - The datetime_column_name parameter identifies the column in the data source that contains datetime information.
             - The date_time_format parameter defines the format of the datetime values in the data source.
             - If data_path is not provided, the instance will be initialized without any data source.
+            - For the GEE backend, projects are read from EE_PROJECT_POOL (comma-separated),
+              falling back to GEE_PROJECT, EE_PROJECT, or GOOGLE_EARTH_ENGINE_PROJECT.
         """
         if data_path is None and 'data_link' in kwargs:
             # Backward compatibility for old constructor calls.
@@ -91,8 +155,20 @@ class ClimateFiller():
         self.eto_output_data = DataFrame()
         self.data = DataFrame()
         if backend == 'gee':
-            gee_project = self._get_gee_project_name()
-            ee.Initialize(project=gee_project)
+            self._gee_projects = self._get_gee_project_pool()
+            random.shuffle(self._gee_projects)
+            self._gee_project_index = -1
+            initialization_errors = []
+            for project_index in range(len(self._gee_projects)):
+                try:
+                    self._initialize_gee_project(project_index)
+                    break
+                except Exception as exc:
+                    initialization_errors.append(exc)
+            else:
+                raise RuntimeError(
+                    "Could not initialize Earth Engine with any configured project."
+                ) from initialization_errors[-1]
         if data_path is None:
             self.data = DataFrame()
             
@@ -403,21 +479,33 @@ class ClimateFiller():
         )
 
     @staticmethod
-    def _get_gee_project_name():
-        env_candidates = [
-            os.getenv('GEE_PROJECT'),
-            os.getenv('EE_PROJECT'),
-            os.getenv('GOOGLE_EARTH_ENGINE_PROJECT')
-        ]
-        for value in env_candidates:
-            if value:
-                return value
+    def _get_gee_project_pool():
+        env_pool = os.getenv('EE_PROJECT_POOL')
+        if env_pool:
+            projects = []
+            for project in env_pool.split(','):
+                project = project.strip()
+                if project and project not in projects:
+                    projects.append(project)
+            if projects:
+                return projects
+
+        env_project = next(
+            (
+                os.getenv(key)
+                for key in ('GEE_PROJECT', 'EE_PROJECT', 'GOOGLE_EARTH_ENGINE_PROJECT')
+                if os.getenv(key)
+            ),
+            None,
+        )
+        if env_project:
+            return [env_project.strip()]
 
         env_files = [
             os.path.join(os.getcwd(), '.env'),
             os.path.join(os.path.dirname(__file__), '.env')
         ]
-        keys = ('GEE_PROJECT', 'EE_PROJECT', 'GOOGLE_EARTH_ENGINE_PROJECT')
+        file_values = {}
         for env_file in env_files:
             if not os.path.exists(env_file):
                 continue
@@ -429,14 +517,76 @@ class ClimateFiller():
                         continue
                     key, value = raw.split('=', 1)
                     key = key.strip()
-                    if key in keys:
+                    if key in ('EE_PROJECT_POOL', 'GEE_PROJECT', 'EE_PROJECT', 'GOOGLE_EARTH_ENGINE_PROJECT'):
                         parsed = value.strip().strip('"').strip("'")
-                        if parsed:
-                            return parsed
+                        if parsed and key not in file_values:
+                            file_values[key] = parsed
+
+        configured_pool = file_values.get('EE_PROJECT_POOL')
+        if configured_pool:
+            projects = []
+            for project in configured_pool.split(','):
+                project = project.strip()
+                if project and project not in projects:
+                    projects.append(project)
+            if projects:
+                return projects
+
+        legacy_candidates = [
+            file_values.get('GEE_PROJECT'),
+            file_values.get('EE_PROJECT'),
+            file_values.get('GOOGLE_EARTH_ENGINE_PROJECT'),
+        ]
+        projects = []
+        for project in legacy_candidates:
+            if project and project.strip() and project.strip() not in projects:
+                projects.append(project.strip())
+        if projects:
+            return projects
 
         raise ValueError(
-            "GEE project is not configured. Please define GEE_PROJECT in .env."
+            "GEE projects are not configured. Define EE_PROJECT_POOL or GEE_PROJECT in .env."
         )
+
+    @staticmethod
+    def _get_gee_project_name():
+        """Return one configured Earth Engine project for legacy callers."""
+        return random.choice(ClimateFiller._get_gee_project_pool())
+
+    @staticmethod
+    def _is_gee_project_failure(exc):
+        message = str(exc).lower()
+        if 'concurrency limit' in message or 'too many concurrent' in message:
+            return False
+        return any(
+            marker in message
+            for marker in (
+                'quota',
+                'restricted mode',
+                'non-commercial',
+                'noncommercial',
+                'rate limit',
+                '429',
+                'resource_exhausted',
+                'resource exhausted',
+                'project is not registered',
+                'not registered to use earth engine',
+                'not enabled',
+                'permission denied',
+                '403',
+            )
+        )
+
+    def _initialize_gee_project(self, project_index):
+        project = self._gee_projects[project_index]
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                'error',
+                message=r'(?i).*(restricted|non.?commercial).*',
+                category=UserWarning,
+            )
+            ee.Initialize(project=project)
+        self._gee_project_index = project_index
 
     @staticmethod
     def _as_timestamp(value):
@@ -2014,6 +2164,7 @@ class ClimateFiller():
                                                                                  latitude,
                                                                                  longitude))
     
+    @_with_gee_project_failover
     def _impute_single_column(self, column_to_fill_name='ta', 
                               product="era5_land",
                               machine_learning_enabled=False,
@@ -4004,6 +4155,7 @@ class ClimateFiller():
                 self.data.set_dataframe(self.data.get_dataframe()[self.data.get_dataframe()[drop_row_if_nan_in_column].notna()])
                 #self.__dataframe = self.__dataframe[~(np.isnan(self.__dataframe).any(axis=1))] # removes rows containing at least one nan
 
+    @_with_gee_project_failover
     def download(self, 
     variable, 
     start_date='2021-01-01',
@@ -4392,6 +4544,7 @@ class ClimateFiller():
         Notes:
             - The export method is used to save the processed data to a file or location.
             - The path_link parameter specifies the destination path or link for the exported data.
+            - Parent directories are created automatically when they do not exist.
             - If data_type is not provided, the format is inferred from the destination file extension.
             - Geospatial exports preserve the source CRS by default when crs is None.
             - The processed data will be saved according to the specified file format and location.
@@ -4416,6 +4569,12 @@ class ClimateFiller():
         export_kwargs = dict(kwargs)
         if 'index' not in export_kwargs and not is_geospatial_output:
             export_kwargs['index'] = True
+
+        path_link = os.fspath(path_link)
+        output_dir = os.path.dirname(path_link)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
         try:
             setattr(self.data, 'last_export_path', path_link)
             setattr(self.data, 'last_export_data_type', data_type)
@@ -4424,10 +4583,6 @@ class ClimateFiller():
             pass
 
         if is_geospatial_output:
-            output_dir = os.path.dirname(path_link)
-            if output_dir:
-                self.check_directory_existance(output_dir)
-
             df = self.data.get_dataframe().copy()
             lon_column = kwargs.pop('lon_column', None)
             lat_column = kwargs.pop('lat_column', None)
@@ -4460,6 +4615,7 @@ class ClimateFiller():
         print(f"Exported file: {os.path.abspath(path_link)}")
         return result
         
+    @_with_gee_project_failover
     def _resolve_era5_land_sample_geometry(
         self,
         lon,
@@ -4573,6 +4729,7 @@ class ClimateFiller():
         )
         return ee.Geometry.Point([snapped_lon, snapped_lat])
 
+    @_with_gee_project_failover
     def download_era5_land_data_by_years(self, variables, start_date, end_date):
         self.check_directory_existance('data')
         self.check_directory_existance('data/cache')
@@ -4646,6 +4803,7 @@ class ClimateFiller():
                     f"Check lon/lat ({self.lon}, {self.lat}) and GEE export for variables={variables}."
                 )
                 
+    @_with_gee_project_failover
     def download_era5_land_data_by_months(self, variables, lon, lat, start_date, end_date):
         if isinstance(start_date, str) and isinstance(end_date, str):
             # Convert the start date and end date to datetime objects
@@ -4742,6 +4900,55 @@ class ClimateFiller():
     def watt_to_megaj_per_hour(self, column_name='rs'):
         self.data.transform_column(column_name, lambda o: o * 0.0036)
         
+    def wind_speed_z_source_to_z_target(
+        self,
+        column_name,
+        z_source=10,
+        z_target=2,
+        z0=0.03,
+    ):
+        """
+        Convert a wind-speed column from one measurement height to another.
+
+        Parameters
+        ----------
+        column_name : str
+            Name of the wind-speed column to convert in-place.
+        z_source : float, optional
+            Height at which the wind speed was measured, in meters. Defaults to 10.
+        z_target : float, optional
+            Height to which the wind speed is converted, in meters. Defaults to 2.
+        z0 : float, optional
+            Surface roughness length, in meters. Defaults to 0.03.
+
+        Returns
+        -------
+        ClimateFiller
+            This instance, with the selected column converted.
+
+        Notes
+        -----
+        Uses the neutral logarithmic wind profile implemented by
+        :meth:`Lib.wind_speed_z_source_to_z_target`.
+        """
+        self._materialize_dataset_for_column_ops()
+        if column_name not in self.data.get_columns_names():
+            raise ValueError(
+                f"Wind-speed column '{column_name}' was not found. "
+                f"Available columns: {self.data.get_columns_names()}"
+            )
+
+        self.data.transform_column(
+            column_name,
+            lambda value: Lib.wind_speed_z_source_to_z_target(
+                value,
+                z_source=z_source,
+                z_target=z_target,
+                z0=z0,
+            ),
+        )
+        return self
+
       
     def climate_zones_classification(self,):
         """

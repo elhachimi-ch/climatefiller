@@ -151,6 +151,51 @@ else:
     sys.modules['geopandas'].points_from_xy = staticmethod(lambda x, y, crs=None: None)
 
 from climatefiller import ClimateFiller
+import climatefiller as climatefiller_module
+
+
+def test_gee_project_pool_parses_and_deduplicates_environment_values(monkeypatch):
+    monkeypatch.setenv('EE_PROJECT_POOL', 'project-a, project-b, project-a,')
+    monkeypatch.setenv('GEE_PROJECT', 'legacy-project')
+
+    assert ClimateFiller._get_gee_project_pool() == ['project-a', 'project-b']
+
+
+def test_gee_initialization_tries_configured_projects_in_order(monkeypatch, tmp_path):
+    monkeypatch.setenv('EE_PROJECT_POOL', 'unavailable-project, working-project')
+    monkeypatch.setattr(climatefiller_module.random, 'shuffle', lambda projects: None)
+    initialized_projects = []
+
+    def initialize(project=None):
+        initialized_projects.append(project)
+        if project == 'unavailable-project':
+            raise RuntimeError('Project unavailable')
+
+    monkeypatch.setattr(climatefiller_module.ee, 'Initialize', initialize)
+    cf = ClimateFiller(backend='gee', artifact_folder=str(tmp_path / 'artifacts'))
+
+    assert initialized_projects == ['unavailable-project', 'working-project']
+    assert cf._gee_project_index == 1
+
+
+def test_gee_request_retries_with_next_project_after_quota_failure():
+    class _DummyClimateFiller:
+        backend = 'gee'
+        _gee_projects = ['project-a', 'project-b']
+        _gee_project_index = 0
+
+        _is_gee_project_failure = staticmethod(ClimateFiller._is_gee_project_failure)
+
+        def _initialize_gee_project(self, project_index):
+            self._gee_project_index = project_index
+
+        @climatefiller_module._with_gee_project_failover
+        def fetch(self):
+            if self._gee_projects[self._gee_project_index] == 'project-a':
+                raise RuntimeError('Earth Engine quota exceeded')
+            return self._gee_projects[self._gee_project_index]
+
+    assert _DummyClimateFiller().fetch() == 'project-b'
 
 
 def test_explicit_frequency_is_used_for_frequency_inference():
@@ -506,6 +551,27 @@ def test_export_includes_index_by_default_for_table_outputs():
     assert cf.data.export_calls[0]['kwargs']['index'] is True
 
 
+def test_export_creates_missing_parent_directory_for_table_output(tmp_path):
+    class _RecordingDataFrame:
+        def __init__(self):
+            self.parent_existed_when_exported = False
+
+        def export(self, path_link, data_type=None, **kwargs):
+            self.parent_existed_when_exported = os.path.isdir(os.path.dirname(path_link))
+
+    cf = ClimateFiller(
+        pd.DataFrame({'date': ['2020-01-01 00:00:00'], 'value': [1.0]}),
+        datetime_column_name='date',
+        backend='local',
+    )
+    cf.data = _RecordingDataFrame()
+    output_path = tmp_path / 'new' / 'nested' / 'output.csv'
+
+    cf.export(output_path)
+
+    assert cf.data.parent_existed_when_exported
+
+
 def test_impute_single_column_normalizes_mixed_timezone_indexes(monkeypatch):
     os.environ.setdefault('GEE_PROJECT', 'dummy')
 
@@ -792,6 +858,68 @@ def test_convert_rs_to_mj_m2_day_respects_units_dict():
 
     # Explicit W/m2: convert
     assert Lib.convert_rs_to_mj_m2_day(100.0, units_dict={'rs': 'W/m2'}) == 100.0 * 0.0864
+
+
+def test_wind_speed_z_source_to_z_target_converts_scalar_and_column_values():
+    from lib import Lib
+
+    factor = np.log(2.0 / 0.03) / np.log(10.0 / 0.03)
+    assert np.isclose(Lib.wind_speed_z_source_to_z_target(5.0), 5.0 * factor)
+
+    speeds = pd.Series([5.0, 10.0], name='wind_speed')
+    converted = Lib.wind_speed_z_source_to_z_target(speeds)
+
+    assert converted.name == 'wind_speed'
+    np.testing.assert_allclose(converted.to_numpy(), [5.0 * factor, 10.0 * factor])
+
+
+def test_climatefiller_converts_named_wind_column_in_place():
+    factor = np.log(2.0 / 0.03) / np.log(10.0 / 0.03)
+    cf = ClimateFiller(
+        pd.DataFrame({
+            'date': ['2020-01-01 00:00:00', '2020-01-01 01:00:00'],
+            'wind_speed_10m': [5.0, np.nan],
+        }),
+        datetime_column_name='date',
+        backend='local',
+    )
+
+    result = cf.wind_speed_z_source_to_z_target('wind_speed_10m')
+
+    assert result is cf
+    converted = cf.data.get_dataframe()['wind_speed_10m']
+    assert np.isclose(converted.iloc[0], 5.0 * factor)
+    assert pd.isna(converted.iloc[1])
+
+
+def test_climatefiller_wind_conversion_rejects_unknown_column():
+    cf = ClimateFiller(
+        pd.DataFrame({
+            'date': ['2020-01-01 00:00:00'],
+            'wind_speed_10m': [5.0],
+        }),
+        datetime_column_name='date',
+        backend='local',
+    )
+
+    with np.testing.assert_raises_regex(ValueError, "Wind-speed column 'missing'"):
+        cf.wind_speed_z_source_to_z_target('missing')
+
+
+def test_wind_speed_z_source_to_z_target_validates_profile_heights():
+    from lib import Lib
+
+    with np.testing.assert_raises_regex(ValueError, 'greater than'):
+        Lib.wind_speed_z_source_to_z_target(5.0, z_source=0.03)
+
+
+def test_logarithmic_wind_profile_uses_height_conversion():
+    from lib import Lib
+
+    source_speed = np.hypot(3.0, 4.0)
+    expected = Lib.wind_speed_z_source_to_z_target(source_speed)
+
+    assert np.isclose(Lib.logarithmic_wind_profile(3.0, 4.0), expected)
 
 
 def test_eto_estimation_daily_units_dict_skips_rs_conversion_when_mj():
