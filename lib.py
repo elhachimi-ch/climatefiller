@@ -133,11 +133,12 @@ class Lib:
         )
 
     @staticmethod
-    def convert_rs_to_mj_m2_day(value, units_dict=None, legacy_factor=0.0864, variable_keys=None):
+    def convert_rs_to_mj_m2_day(value, units_dict=None,     legacy_factor=1.0, variable_keys=None):
         """
         Convert solar radiation to MJ/m2/day.
 
-        Missing unit => apply legacy_factor (default 0.0864 for W/m2 over 24h).
+            Missing unit => assume MJ/m2/day (legacy_factor=1.0). Pass legacy_factor=0.0864
+            to treat unitless values as W/m2 averaged over 24h.
         If unit is already MJ/m2/day (or alias), return value unchanged.
         """
         keys = tuple(variable_keys or ()) + (

@@ -1055,10 +1055,11 @@ def test_eto_estimation_daily_requires_method_specific_columns():
 def test_convert_rs_to_mj_m2_day_respects_units_dict():
     from lib import Lib
 
-    # Legacy path (no unit): W/m2 * 0.0864
-    assert Lib.convert_rs_to_mj_m2_day(100.0) == 100.0 * 0.0864
-    assert Lib.convert_rs_to_mj_m2_day(100.0, units_dict=None) == 100.0 * 0.0864
-    assert Lib.convert_rs_to_mj_m2_day(100.0, units_dict={}) == 100.0 * 0.0864
+    # Default (no unit): already MJ/m2/day
+    assert Lib.convert_rs_to_mj_m2_day(18.0) == 18.0
+    assert Lib.convert_rs_to_mj_m2_day(18.0, units_dict=None) == 18.0
+    assert Lib.convert_rs_to_mj_m2_day(18.0, units_dict={}) == 18.0
+    assert Lib.convert_rs_to_mj_m2_day(100.0, units_dict={}, legacy_factor=0.0864) == 100.0 * 0.0864
 
     # Already MJ/m2/day: no conversion
     assert Lib.convert_rs_to_mj_m2_day(18.0, units_dict={'rs': 'MJ/m2/day'}) == 18.0
@@ -1149,16 +1150,18 @@ def test_eto_estimation_daily_units_dict_skips_rs_conversion_when_mj():
     rs_mj = 18.0
     rs_wm2 = rs_mj / 0.0864
 
-    eto_legacy = Lib.eto_penman_monteith_daily({**base_row, 'rs_mean': rs_wm2})
+    eto_legacy = Lib.eto_penman_monteith_daily(
+        {**base_row, 'rs_mean': rs_wm2}, units_dict={'rs': 'W/m2'}
+    )
     eto_mj = Lib.eto_penman_monteith_daily(
         {**base_row, 'rs_mean': rs_mj},
         units_dict={'rs': 'MJ/m2/day'},
     )
-    eto_wrong_if_converted = Lib.eto_penman_monteith_daily({**base_row, 'rs_mean': rs_mj})
+    eto_default = Lib.eto_penman_monteith_daily({**base_row, 'rs_mean': rs_mj})
 
     assert abs(eto_legacy - eto_mj) < 1e-9
-    # Without units_dict, providing MJ values would wrongly apply *0.0864
-    assert abs(eto_wrong_if_converted - eto_mj) > 0.1
+    # Without units_dict, rs is assumed to be MJ/m2/day
+    assert abs(eto_default - eto_mj) < 1e-9
 
     daily_df = pd.DataFrame(
         {
@@ -1646,7 +1649,7 @@ def test_eto_estimation_units_dict_accepts_source_column_names():
 
     estimates = []
     for dataframe, kwargs in (
-        (reference, {}),
+        (reference, {'units_dict': {'rs': 'W/m2'}}),
         (
             converted,
             {

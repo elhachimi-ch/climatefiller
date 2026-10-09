@@ -3527,8 +3527,8 @@ class ClimateFiller():
             alpha_pt: Priestley-Taylor coefficient.
             units_dict (dict or None): Optional units of the input columns. Keys may be short names
                 ('ta', 'rh', 'ws', 'rs'), the column names passed above (e.g. 't2m'), or daily
-                names (e.g. 'rs_mean'). When a variable's unit is omitted, the legacy conversion
-                path is kept (rs treated as W/m2). When provided, values are converted to FAO-56
+                names (e.g. 'rs_mean'). When a variable's unit is omitted, rs is assumed to be MJ/m2/day
+                                (pass {'rs': 'W/m2'} to convert with *0.0864 for freq='d'; freq='h' still defaults to W/m2). When provided, values are converted to FAO-56
                 targets: ta °C, rh %, ws m/s, rs MJ/m2/day (MJ/m2/h for freq='h').
                 Give the unit of the input column: with freq='d' the daily mean is converted, so
                 hourly rs in MJ/m2 per hour is 'MJ/m2/h', not 'MJ/m2/day'.
@@ -3984,8 +3984,8 @@ class ClimateFiller():
             alpha_pt: Priestley-Taylor coefficient.
             units_dict (dict or None): Optional units for input variables. Keys may be short names
                 (e.g. 'rs', 'ta', 'rh', 'ws') or column-style names (e.g. 'rs_mean', 'ta_max').
-                When a variable's unit is omitted, the legacy conversion path is kept
-                (e.g. rs treated as W/m2 and converted with *0.0864).
+                When a variable's unit is omitted, the input is assumed to already be in the
+                FAO-56 target unit (rs in MJ/m2/day; pass {'rs': 'W/m2'} to convert with *0.0864).
                 When provided, values are converted to FAO-56 targets:
                 ta °C, rh %, ws m/s, rs MJ/m2/day.
                 Example: {'rs': 'MJ/m2/day'} skips the W/m2->MJ/m2/day conversion.
