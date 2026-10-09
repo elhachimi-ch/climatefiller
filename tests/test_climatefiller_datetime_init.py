@@ -778,6 +778,81 @@ def test_export_creates_missing_parent_directory_for_table_output(tmp_path):
     assert cf.data.parent_existed_when_exported
 
 
+def test_download_solar_radiation_mcd18_modis_appends_daily_column(monkeypatch):
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    df = pd.DataFrame({
+        'date': pd.date_range('2020-01-01 00:00:00', periods=48, freq='h').astype(str),
+        'lon': 71.8,
+        'lat': 29.3,
+        'value': 1.0,
+    })
+    cf = ClimateFiller(df, datetime_column_name='date', lon='lon', lat='lat', backend='local')
+    calls = []
+
+    def fake_fetch(self, lon, lat, start_date, end_date, scale=1000, collection_name='x', show_progress=True):
+        calls.append((lon, lat, start_date, end_date))
+        return pd.Series([8.64], index=pd.to_datetime(['2020-01-01']))
+
+    monkeypatch.setattr(ClimateFiller, '_mcd18_fetch_daily_dsr', fake_fetch)
+
+    cf.download_solar_radiation_mcd18_modis()
+    result = cf.data.get_dataframe()
+
+    assert calls[0][:2] == (71.8, 29.3)
+    assert calls[0][2].strftime('%Y-%m-%d') == '2020-01-01'
+    assert calls[0][3].strftime('%Y-%m-%d') == '2020-01-02'
+    assert (result['rs_mcd18_modis'].iloc[:24] == 8.64).all()
+    assert result['rs_mcd18_modis'].iloc[24:].isna().all()
+
+    cf.download_solar_radiation_mcd18_modis(column_name='rs_w', unit='W/m2')
+    assert abs(cf.data.get_dataframe()['rs_w'].iloc[0] - 100.0) < 1e-9
+
+
+def test_compare_columns_writes_reports_and_figures(tmp_path):
+    import matplotlib
+    matplotlib.use('Agg')
+
+    rng = np.random.default_rng(0)
+    dates = pd.date_range('2019-01-01', '2021-12-31', freq='D')
+    seasonal = 15 + 8 * np.sin(2 * np.pi * (dates.dayofyear - 80) / 365)
+    reference = seasonal + rng.normal(0, 1.5, len(dates))
+    estimate = np.asarray(1.05 * reference + 0.5 + rng.normal(0, 1.0, len(dates)))
+    estimate[10:20] = np.nan
+    df = pd.DataFrame({'date': dates.astype(str), 'rs': reference, 'rs_mcd18_modis': estimate})
+    cf = ClimateFiller(df, datetime_column_name='date', backend='local')
+
+    out = tmp_path / 'nested' / 'report'
+    result = cf.compare_columns('rs', 'rs_mcd18_modis', output_folder=out, figure_formats=('png',), dpi=60)
+
+    for name in (
+        'summary_metrics.csv', 'metrics_by_year.csv', 'metrics_by_month_of_year.csv',
+        'metrics_by_season.csv', 'paired_native.csv', 'paired_weekly.csv', 'paired_monthly.csv',
+        'paired_yearly.csv', 'report.md', 'report.txt', 'fig_scatter_by_scale.png',
+        'fig_timeseries_by_scale.png', 'fig_seasonal_cycle.png', 'fig_bland_altman.png',
+        'fig_error_distribution.png', 'fig_metrics_by_year.png',
+    ):
+        assert (out / name).exists(), name
+
+    native = result['summary'].set_index('scale').loc['native']
+    assert native['n'] == len(dates) - 10
+    assert native['r'] > 0.95
+    assert native['bias'] > 0
+    assert len(result['by_year']) == 3
+    assert list(result['by_season']['season']) == ['DJF', 'MAM', 'JJA', 'SON']
+    assert 'Suggested text for the methods section' in result['report_markdown']
+
+
+def test_agreement_metrics_known_values():
+    from lib import Lib
+
+    perfect = Lib.agreement_metrics([1, 2, 3, 4], [1, 2, 3, 4])
+    assert perfect['rmse'] == 0 and perfect['bias'] == 0
+    assert abs(perfect['nse'] - 1) < 1e-12 and abs(perfect['kge'] - 1) < 1e-12
+    shifted = Lib.agreement_metrics([1, 2, 3, 4], [2, 3, 4, np.nan])
+    assert shifted['n'] == 3 and shifted['bias'] == 1.0 and abs(shifted['r'] - 1) < 1e-12
+
+
 def test_impute_single_column_normalizes_mixed_timezone_indexes(monkeypatch):
     os.environ.setdefault('GEE_PROJECT', 'dummy')
 

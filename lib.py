@@ -921,6 +921,69 @@ class Lib:
         return elevation
     
     @staticmethod
+    def agreement_metrics(reference, estimate):
+        """
+        Agreement statistics between a reference series and an estimate (est - ref convention).
+
+        Pairs with a NaN in either series are dropped. Returns a dict with: n, mean_ref,
+        mean_est, std_ref, std_est, bias, pbias_pct, mae, rmse, nrmse_pct (RMSE / mean_ref),
+        r, r2 (squared Pearson r), nse (Nash-Sutcliffe), kge (Gupta 2009), willmott_d,
+        slope and intercept (OLS of estimate on reference), and ccc (Lin's concordance).
+        Statistics that need more than 2 pairs or a non-constant series are NaN otherwise.
+        """
+        ref = pd.to_numeric(pd.Series(reference), errors='coerce')
+        est = pd.to_numeric(pd.Series(estimate), errors='coerce')
+        mask = ref.notna().to_numpy() & est.notna().to_numpy()
+        x = ref.to_numpy(dtype=float)[mask]
+        y = est.to_numpy(dtype=float)[mask]
+        n = int(x.size)
+        keys = (
+            'mean_ref', 'mean_est', 'std_ref', 'std_est', 'bias', 'pbias_pct', 'mae', 'rmse',
+            'nrmse_pct', 'r', 'r2', 'nse', 'kge', 'willmott_d', 'slope', 'intercept', 'ccc',
+        )
+        out = {'n': n, **{key: np.nan for key in keys}}
+        if n == 0:
+            return out
+
+        diff = y - x
+        mean_x, mean_y = x.mean(), y.mean()
+        out.update(
+            mean_ref=mean_x,
+            mean_est=mean_y,
+            bias=diff.mean(),
+            mae=np.abs(diff).mean(),
+            rmse=float(np.sqrt((diff ** 2).mean())),
+        )
+        if mean_x != 0:
+            out['pbias_pct'] = 100.0 * diff.sum() / x.sum()
+            out['nrmse_pct'] = 100.0 * out['rmse'] / mean_x
+        if n < 3:
+            return out
+
+        std_x, std_y = x.std(ddof=1), y.std(ddof=1)
+        out.update(std_ref=std_x, std_est=std_y)
+        ss_x = ((x - mean_x) ** 2).sum()
+        if ss_x > 0:
+            out['nse'] = 1.0 - (diff ** 2).sum() / ss_x
+            out['willmott_d'] = 1.0 - (diff ** 2).sum() / (
+                ((np.abs(y - mean_x) + np.abs(x - mean_x)) ** 2).sum() or np.nan
+            )
+            out['slope'] = ((x - mean_x) * (y - mean_y)).sum() / ss_x
+            out['intercept'] = mean_y - out['slope'] * mean_x
+        if std_x > 0 and std_y > 0:
+            r = float(np.corrcoef(x, y)[0, 1])
+            out['r'] = r
+            out['r2'] = r ** 2
+            if mean_x != 0 and mean_y != 0:
+                out['kge'] = 1.0 - float(np.sqrt(
+                    (r - 1) ** 2 + (std_y / std_x - 1) ** 2 + (mean_y / mean_x - 1) ** 2
+                ))
+            cov = ((x - mean_x) * (y - mean_y)).sum() / n
+            denom = x.var() + y.var() + (mean_x - mean_y) ** 2
+            out['ccc'] = 2.0 * cov / denom if denom > 0 else np.nan
+        return out
+
+    @staticmethod
     def wind_speed_z_source_to_z_target(wind_speed, z_source=10, z_target=2, z0=0.03):
         """
         Convert wind speed measured at one height to another using the log profile.

@@ -5094,6 +5094,138 @@ class ClimateFiller():
                 )
                 
     @_with_gee_project_failover
+    def _mcd18_fetch_daily_dsr(
+        self, lon, lat, start_date, end_date, scale=1000, collection_name='MODIS/062/MCD18A1',
+        show_progress=True,
+    ):
+        """
+        Sample daily shortwave radiation Rs [MJ/m2/day] from MCD18A1 at a point.
+
+        Each daily image holds eight 3-hourly DSR bands (W/m2). Rs is their 3-hour trapezoid:
+            Rs = 0.0108 * (0.5*DSR00 + DSR03 + DSR06 + DSR09 + DSR12 + DSR15 + DSR18 + 0.5*DSR21)
+        A day with any masked slot has no value. Requests are split by year to stay under
+        the Earth Engine getInfo element limit.
+
+        Returns:
+            pandas.Series: Daily Rs in MJ/m2/day indexed by date (days without data are absent).
+        """
+        bands = [f'GMT_{hour:02d}00_DSR' for hour in range(0, 24, 3)]
+        weights = [0.5, 1, 1, 1, 1, 1, 1, 0.5]
+        point = ee.Geometry.Point([float(lon), float(lat)])
+        collection = ee.ImageCollection(collection_name).select(bands)
+
+        def to_feature(image):
+            rs = image.expression(
+                '0.0108 * (' + ' + '.join(f'{w} * b{i}' for i, w in enumerate(weights)) + ')',
+                {f'b{i}': image.select(band) for i, band in enumerate(bands)},
+            ).rename('rs')
+            value = rs.reduceRegion(
+                reducer=ee.Reducer.first(), geometry=point, scale=scale, bestEffort=True, maxPixels=10**6
+            ).get('rs')
+            return ee.Feature(None, {'date': image.date().format('YYYY-MM-dd'), 'rs': value})
+
+        records = {}
+        years = range(start_date.year, end_date.year + 1)
+        for year in tqdm(years, desc='MCD18A1 years', unit='year', disable=not show_progress):
+            window_start = max(start_date, datetime.datetime(year, 1, 1))
+            window_end = min(end_date, datetime.datetime(year, 12, 31)) + timedelta(days=1)
+            features = (
+                collection.filterDate(window_start.strftime('%Y-%m-%d'), window_end.strftime('%Y-%m-%d'))
+                .map(to_feature)
+                .getInfo()['features']
+            )
+            for feature in features:
+                properties = feature['properties']
+                if properties.get('rs') is not None:
+                    records[properties['date']] = float(properties['rs'])
+
+        series = pd.Series(records, dtype='float64')
+        series.index = pd.to_datetime(series.index)
+        return series.sort_index()
+
+    def download_solar_radiation_mcd18_modis(
+        self,
+        column_name='rs_mcd18_modis',
+        unit='MJ/m2/day',
+        scale=1000,
+        collection_name='MODIS/062/MCD18A1',
+        show_progress=True,
+    ):
+        """
+        Download MODIS MCD18A1 daily shortwave radiation at the station and append it as a column.
+
+        The date range is taken from the current dataframe index and the point from the
+        ClimateFiller lon/lat (numbers, or resolved from column names at initialisation).
+        Daily Rs is integrated from the eight 3-hourly downward shortwave radiation bands
+        with a 3-hour trapezoid:
+
+            Rs = 0.0108 * (0.5*DSR00 + DSR03 + DSR06 + DSR09 + DSR12 + DSR15 + DSR18 + 0.5*DSR21)
+
+        with DSR in W/m2 and Rs in MJ/m2/day. The value is written on every row of the
+        matching day, so sub-daily data repeat the daily value.
+
+        Parameters
+        ----------
+        column_name : str, default 'rs_mcd18_modis'
+            Name of the new column. An existing column of that name is replaced.
+        unit : {'MJ/m2/day', 'W/m2'}, default 'MJ/m2/day'
+            Unit of the written values. 'W/m2' is the daily mean irradiance (Rs / 0.0864).
+        scale : int, default 1000
+            Sampling scale in meters.
+        collection_name : str, default 'MODIS/062/MCD18A1'
+            Earth Engine MCD18A1 collection.
+        show_progress : bool, default True
+            Show a tqdm progress bar over the yearly Earth Engine requests.
+
+        Returns
+        -------
+        ClimateFiller
+            self, with the new column in self.data.
+
+        Notes
+        -----
+        A day with any masked 3-hourly slot stays NaN. Needs the Earth Engine setup of the
+        other GEE methods (EE_PROJECT_POOL failover applies). The default MJ/m2/day matches
+        the ``eto_estimation`` default for rs.
+
+        Examples
+        --------
+        >>> cf = ClimateFiller('aws.csv', datetime_column_name='time', lon='lon', lat='lat')
+        >>> cf.download_solar_radiation_mcd18_modis()
+        >>> cf.eto_estimation(rs_column_name='rs_mcd18_modis')
+        """
+        method = 'download_solar_radiation_mcd18_modis'
+        self._require_coordinates('Downloading MCD18 solar radiation', lat=self.lat, lon=self.lon)
+        normalized_unit = str(unit).strip().lower().replace(' ', '')
+        if normalized_unit not in {'w/m2', 'mj/m2/day'}:
+            raise ValueError(f"unit must be 'MJ/m2/day' or 'W/m2', got '{unit}'.")
+
+        dataframe = self.data.get_dataframe()
+        index = pd.DatetimeIndex(dataframe.index)
+        if index.empty or index.isna().all():
+            raise ValueError("The dataframe needs a datetime index to detect the date range.")
+        start_date = index.min().to_pydatetime().replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
+        end_date = index.max().to_pydatetime().replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
+        print(f"[{method}] {start_date:%Y-%m-%d} to {end_date:%Y-%m-%d} at ({self.lon}, {self.lat})")
+
+        daily = self._mcd18_fetch_daily_dsr(
+            self.lon, self.lat, start_date, end_date, scale=scale, collection_name=collection_name,
+            show_progress=show_progress,
+        )
+        if normalized_unit == 'w/m2':
+            daily = daily / 0.0864
+
+        days = index.tz_localize(None).normalize() if index.tz is not None else index.normalize()
+        dataframe = dataframe.copy()
+        dataframe[column_name] = daily.reindex(days).to_numpy()
+        self.data.set_dataframe(dataframe)
+        print(
+            f"[{method}] '{column_name}' added: {int(dataframe[column_name].notna().sum())}"
+            f"/{len(dataframe)} rows filled."
+        )
+        return self
+
+    @_with_gee_project_failover
     def download_era5_land_data_by_months(self, variables, lon, lat, start_date, end_date):
         if isinstance(start_date, str) and isinstance(end_date, str):
             # Convert the start date and end date to datetime objects
@@ -5186,6 +5318,516 @@ class ClimateFiller():
         if not os.path.exists(directory_path):
             os.makedirs(directory_path)
             print(f"Directory created: {directory_path}")
+
+    _COMPARE_SEASONS = {
+        12: 'DJF', 1: 'DJF', 2: 'DJF', 3: 'MAM', 4: 'MAM', 5: 'MAM',
+        6: 'JJA', 7: 'JJA', 8: 'JJA', 9: 'SON', 10: 'SON', 11: 'SON',
+    }
+    _COMPARE_METRIC_LABELS = {
+        'n': 'n', 'mean_ref': 'Mean ref', 'mean_est': 'Mean est', 'bias': 'Bias',
+        'pbias_pct': 'PBIAS (%)', 'mae': 'MAE', 'rmse': 'RMSE', 'nrmse_pct': 'NRMSE (%)',
+        'r': 'r', 'r2': 'R2', 'nse': 'NSE', 'kge': 'KGE', 'willmott_d': 'd',
+        'slope': 'Slope', 'intercept': 'Intercept', 'ccc': 'CCC',
+    }
+
+    @staticmethod
+    def _compare_markdown_table(dataframe, digits=3):
+        """Render a dataframe as a GitHub-flavoured Markdown table (no tabulate dependency)."""
+        def fmt(value):
+            if isinstance(value, (float, np.floating)):
+                return 'NaN' if np.isnan(value) else f"{value:.{digits}f}"
+            return str(value)
+
+        header = [str(c) for c in dataframe.columns]
+        lines = ['| ' + ' | '.join(header) + ' |', '|' + '|'.join(['---'] * len(header)) + '|']
+        for _, row in dataframe.iterrows():
+            lines.append('| ' + ' | '.join(fmt(v) for v in row.tolist()) + ' |')
+        return '\n'.join(lines)
+
+    @staticmethod
+    def _compare_interpretation(metrics, label, ref_label, est_label, unit):
+        """Plain-language reading of one agreement-metrics dict, as a list of sentences."""
+        def rate(value, bounds, names):
+            for bound, name in zip(bounds, names):
+                if value >= bound:
+                    return name
+            return names[-1]
+
+        sentences = []
+        r, bias, pbias = metrics['r'], metrics['bias'], metrics['pbias_pct']
+        if not np.isnan(r):
+            strength = rate(abs(r), (0.9, 0.7, 0.5), ('very strong', 'strong', 'moderate', 'weak'))
+            sentences.append(
+                f"At the {label} scale the two series show a {strength} linear association "
+                f"(r = {r:.3f}, R2 = {metrics['r2']:.3f}, n = {metrics['n']})."
+            )
+        if not np.isnan(bias):
+            direction = 'overestimates' if bias > 0 else 'underestimates'
+            tail = f" ({pbias:+.1f} % of the {ref_label} mean)" if not np.isnan(pbias) else ''
+            sentences.append(
+                f"{est_label} {direction} {ref_label} on average by {abs(bias):.3f} {unit}{tail}; "
+                f"MAE = {metrics['mae']:.3f} and RMSE = {metrics['rmse']:.3f} {unit}"
+                + (f" (NRMSE = {metrics['nrmse_pct']:.1f} %)." if not np.isnan(metrics['nrmse_pct']) else '.')
+            )
+        if not np.isnan(metrics['slope']):
+            sentences.append(
+                f"The OLS fit {est_label} = {metrics['slope']:.3f} x {ref_label} "
+                f"{metrics['intercept']:+.3f} indicates "
+                + ('a proportional bias (slope differs from 1 by more than 10 %).'
+                   if abs(metrics['slope'] - 1) > 0.1 else 'no strong proportional bias.')
+            )
+        if not np.isnan(metrics['nse']):
+            rating = rate(metrics['nse'], (0.75, 0.65, 0.5), ('very good', 'good', 'satisfactory', 'unsatisfactory'))
+            sentences.append(
+                f"NSE = {metrics['nse']:.3f}, KGE = {metrics['kge']:.3f} and Willmott d = "
+                f"{metrics['willmott_d']:.3f}; the NSE rating is {rating} "
+                "(Moriasi et al., 2007 classes, defined for monthly series)."
+            )
+        return sentences
+
+    @staticmethod
+    def _compare_save_figure(fig, base_path, formats, dpi, show):
+        """Save fig as base_path.<format> for every format, then show or close it."""
+        saved = []
+        for extension in formats:
+            path = f"{base_path}.{extension}"
+            fig.savefig(path, dpi=dpi, bbox_inches='tight')
+            saved.append(path)
+        if show:
+            plt.show()
+        plt.close(fig)
+        return saved
+
+    @staticmethod
+    def _compare_scatter(ax, ref, est, title, ref_label, est_label, unit):
+        """Scatter (hexbin when dense) of est vs ref with 1:1 line, OLS line and a stats box."""
+        ref = np.asarray(ref, dtype=float)
+        est = np.asarray(est, dtype=float)
+        low = float(min(ref.min(), est.min()))
+        high = float(max(ref.max(), est.max()))
+        pad = 0.04 * (high - low or 1.0)
+        low, high = low - pad, high + pad
+        if ref.size > 1500:
+            hexes = ax.hexbin(ref, est, gridsize=45, mincnt=1, cmap='viridis', extent=(low, high, low, high))
+            plt.colorbar(hexes, ax=ax, label='Count', pad=0.02)
+        else:
+            ax.scatter(ref, est, s=14, alpha=0.6, edgecolor='none', color='tab:blue')
+        stats = Lib.agreement_metrics(ref, est)
+        ax.plot([low, high], [low, high], 'k--', lw=1, label='1:1')
+        if not np.isnan(stats['slope']):
+            xs = np.array([low, high])
+            ax.plot(xs, stats['intercept'] + stats['slope'] * xs, color='tab:red', lw=1.5, label='OLS fit')
+        ax.set_xlim(low, high)
+        ax.set_ylim(low, high)
+        ax.set_aspect('equal', adjustable='box')
+        ax.set_xlabel(f"{ref_label} ({unit})")
+        ax.set_ylabel(f"{est_label} ({unit})")
+        ax.set_title(title)
+        text = (
+            f"n = {stats['n']}\nr = {stats['r']:.3f}\nR$^2$ = {stats['r2']:.3f}\n"
+            f"RMSE = {stats['rmse']:.3f}\nMAE = {stats['mae']:.3f}\nBias = {stats['bias']:+.3f}\n"
+            f"y = {stats['slope']:.2f}x {stats['intercept']:+.2f}"
+        )
+        ax.text(0.04, 0.96, text, transform=ax.transAxes, va='top', fontsize=8,
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.85, edgecolor='0.7'))
+        ax.legend(loc='lower right', fontsize=8)
+        ax.grid(alpha=0.3)
+
+    def compare_columns(
+        self,
+        reference_column,
+        estimate_column,
+        output_folder='comparison',
+        variable_name='Solar radiation',
+        unit='MJ m$^{-2}$ day$^{-1}$',
+        reference_label='In-situ',
+        estimate_label='MODIS MCD18',
+        aggregation='mean',
+        min_valid_fraction=0.7,
+        figure_formats=('png', 'pdf'),
+        dpi=300,
+        show=False,
+    ):
+        """
+        Compare two columns (e.g. in-situ rs vs satellite rs) and write paper-ready outputs.
+
+        Both columns are paired row by row (rows where either is missing are dropped) and
+        evaluated with the standard model-evaluation statistics of
+        :meth:`Lib.agreement_metrics` (bias, PBIAS, MAE, RMSE, NRMSE, r, R2, NSE, KGE,
+        Willmott d, OLS slope/intercept, Lin's CCC; the estimate minus the reference is the
+        error). The analysis runs over the whole period at the native resolution, on weekly,
+        monthly and yearly aggregates, per calendar year, per month of the year and per
+        meteorological season.
+
+        Parameters
+        ----------
+        reference_column : str
+            Column treated as ground truth (e.g. the in-situ 'rs').
+        estimate_column : str
+            Column being evaluated (e.g. 'rs_mcd18_modis').
+        output_folder : str, default 'comparison'
+            Created when missing. Receives the CSV, TXT, MD and figure files listed below.
+        variable_name, unit : str
+            Used in the report and axis labels (``unit`` accepts matplotlib mathtext).
+        reference_label, estimate_label : str
+            Short names used in the report and figures.
+        aggregation : {'mean', 'sum'}, default 'mean'
+            How rows are combined into weekly/monthly/yearly values. Use 'mean' for rates
+            such as MJ/m2/day and 'sum' for accumulated quantities such as precipitation.
+        min_valid_fraction : float, default 0.7
+            A weekly/monthly/yearly period is kept only when it holds at least this fraction
+            of the paired rows of the best-covered period of the same scale, so partial
+            months or years do not bias the aggregated statistics.
+        figure_formats : tuple of str, default ('png', 'pdf')
+            File formats of every figure (PDF is vector, for journals).
+        dpi : int, default 300
+            Raster resolution of the figures.
+        show : bool, default False
+            Display the figures interactively; they are always saved and then closed.
+
+        Returns
+        -------
+        dict
+            ``summary`` (metrics per scale), ``by_year``, ``by_month``, ``by_season``
+            (dataframes), ``report_markdown`` (str) and ``files`` (list of written paths).
+
+        Notes
+        -----
+        Files written: ``summary_metrics.csv``, ``metrics_by_year.csv``,
+        ``metrics_by_month_of_year.csv``, ``metrics_by_season.csv``, ``paired_native.csv``,
+        ``paired_weekly.csv``, ``paired_monthly.csv``, ``paired_yearly.csv``, ``report.md``,
+        ``report.txt`` and the figures ``fig_scatter_by_scale``, ``fig_timeseries_by_scale``,
+        ``fig_seasonal_cycle``, ``fig_bland_altman``, ``fig_error_distribution`` and
+        ``fig_metrics_by_year`` (the last one needs at least two years). Seasons follow the
+        Northern Hemisphere meteorological convention (DJF, MAM, JJA, SON).
+
+        Examples
+        --------
+        >>> cf.download_solar_radiation_mcd18_modis()
+        >>> cf.compare_columns('rs', 'rs_mcd18_modis', output_folder='reports/rs_modis')
+        """
+        method = 'compare_columns'
+        if aggregation not in ('mean', 'sum'):
+            raise ValueError("aggregation must be 'mean' or 'sum'.")
+        if not 0 < min_valid_fraction <= 1:
+            raise ValueError("min_valid_fraction must be in (0, 1].")
+
+        dataframe = self.data.get_dataframe()
+        for column in (reference_column, estimate_column):
+            if column not in dataframe.columns:
+                raise ValueError(
+                    f"Column '{column}' was not found. Available columns: {list(dataframe.columns)}"
+                )
+        index = pd.DatetimeIndex(dataframe.index)
+        if index.tz is not None:
+            index = index.tz_localize(None)
+        paired = pd.DataFrame(
+            {
+                'reference': pd.to_numeric(dataframe[reference_column], errors='coerce').to_numpy(),
+                'estimate': pd.to_numeric(dataframe[estimate_column], errors='coerce').to_numpy(),
+            },
+            index=index,
+        ).dropna().sort_index()
+        if len(paired) < 3:
+            raise ValueError(f"Need at least 3 paired valid rows to compare, found {len(paired)}.")
+
+        os.makedirs(os.fspath(output_folder), exist_ok=True)
+        files = []
+        print(
+            f"[{method}] {estimate_column} vs {reference_column}: {len(paired)} pairs, "
+            f"{paired.index.min():%Y-%m-%d} to {paired.index.max():%Y-%m-%d}"
+        )
+
+        def to_row(label, stats):
+            return {'scale': label, **stats}
+
+        scales = {'native': paired}
+        for name, rule in (('weekly', 'W'), ('monthly', 'MS'), ('yearly', 'YS')):
+            grouped = paired.resample(rule)
+            counts = grouped['reference'].count()
+            values = getattr(grouped, aggregation)()
+            scales[name] = values[(counts > 0) & (counts >= min_valid_fraction * counts.max())]
+
+        summary = pd.DataFrame([
+            to_row(name, Lib.agreement_metrics(frame['reference'], frame['estimate']))
+            for name, frame in scales.items()
+        ])
+
+        def grouped_metrics(keys, column_name):
+            rows = []
+            for key, frame in paired.groupby(keys):
+                if len(frame) >= 3:
+                    rows.append({column_name: key, **Lib.agreement_metrics(frame['reference'], frame['estimate'])})
+            return pd.DataFrame(rows)
+
+        by_year = grouped_metrics(paired.index.year, 'year')
+        by_month = grouped_metrics(paired.index.month, 'month')
+        season_keys = pd.Index(paired.index.month).map(self._COMPARE_SEASONS)
+        by_season = grouped_metrics(season_keys, 'season')
+        if not by_season.empty:
+            by_season['season'] = pd.Categorical(by_season['season'], ['DJF', 'MAM', 'JJA', 'SON'], ordered=True)
+            by_season = by_season.sort_values('season').reset_index(drop=True)
+            by_season['season'] = by_season['season'].astype(str)
+
+        def write_csv(dataframe_out, filename, index=False):
+            path = os.path.join(os.fspath(output_folder), filename)
+            dataframe_out.to_csv(path, index=index, float_format='%.6g')
+            files.append(path)
+
+        write_csv(summary, 'summary_metrics.csv')
+        write_csv(by_year, 'metrics_by_year.csv')
+        write_csv(by_month, 'metrics_by_month_of_year.csv')
+        write_csv(by_season, 'metrics_by_season.csv')
+        for name, frame in scales.items():
+            out = frame.rename(columns={'reference': reference_column, 'estimate': estimate_column}).copy()
+            out['error'] = out[estimate_column] - out[reference_column]
+            out.index.name = 'datetime'
+            write_csv(out, f'paired_{name}.csv', index=True)
+
+        files += self._compare_make_figures(
+            paired, scales, by_year, reference_label, estimate_label, variable_name, unit,
+            os.fspath(output_folder), tuple(figure_formats), dpi, show,
+        )
+
+        report = self._compare_build_report(
+            paired, scales, summary, by_year, by_month, by_season, reference_column, estimate_column,
+            reference_label, estimate_label, variable_name, unit, aggregation, min_valid_fraction,
+        )
+        for extension, text in (('md', report['markdown']), ('txt', report['text'])):
+            path = os.path.join(os.fspath(output_folder), f'report.{extension}')
+            with open(path, 'w', encoding='utf-8') as handle:
+                handle.write(text)
+            files.append(path)
+
+        print(f"[{method}] wrote {len(files)} files to {os.path.abspath(output_folder)}")
+        return {
+            'summary': summary,
+            'by_year': by_year,
+            'by_month': by_month,
+            'by_season': by_season,
+            'report_markdown': report['markdown'],
+            'files': files,
+        }
+
+    def _compare_make_figures(
+        self, paired, scales, by_year, ref_label, est_label, variable_name, unit,
+        folder, formats, dpi, show,
+    ):
+        """Draw and save the comparison figures; returns the written paths."""
+        saved = []
+        series_scales = [name for name in ('native', 'weekly', 'monthly', 'yearly') if len(scales[name]) >= 3]
+        colors = {'reference': 'tab:blue', 'estimate': 'tab:orange'}
+
+        # 1. Scatter per temporal scale
+        fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+        for ax, name in zip(axes.ravel(), ('native', 'weekly', 'monthly', 'yearly')):
+            if name in series_scales:
+                frame = scales[name]
+                self._compare_scatter(
+                    ax, frame['reference'], frame['estimate'],
+                    f"({'abcd'[('native', 'weekly', 'monthly', 'yearly').index(name)]}) {name.capitalize()}",
+                    ref_label, est_label, unit,
+                )
+            else:
+                ax.axis('off')
+        fig.suptitle(f"{variable_name}: {est_label} vs {ref_label}")
+        saved += self._compare_save_figure(fig, os.path.join(folder, 'fig_scatter_by_scale'), formats, dpi, show)
+
+        # 2. Time series per scale
+        panel_scales = [name for name in ('weekly', 'monthly', 'yearly') if len(scales[name]) >= 2]
+        if panel_scales:
+            fig, axes = plt.subplots(len(panel_scales), 1, figsize=(11, 3.2 * len(panel_scales)), squeeze=False)
+            for ax, name in zip(axes.ravel(), panel_scales):
+                frame = scales[name]
+                marker = 'o' if name == 'yearly' else None
+                ax.plot(frame.index, frame['reference'], color=colors['reference'], lw=1.2, marker=marker, label=ref_label)
+                ax.plot(frame.index, frame['estimate'], color=colors['estimate'], lw=1.2, marker=marker, label=est_label)
+                ax.set_ylabel(f"{variable_name} ({unit})")
+                ax.set_title(f"{name.capitalize()}")
+                ax.grid(alpha=0.3)
+                ax.legend(loc='upper right', ncol=2, fontsize=8)
+            fig.tight_layout()
+            saved += self._compare_save_figure(fig, os.path.join(folder, 'fig_timeseries_by_scale'), formats, dpi, show)
+
+        # 3. Mean seasonal cycle and monthly bias
+        month_frame = paired.groupby(paired.index.month)
+        mean = month_frame.mean()
+        std = month_frame.std()
+        error = (paired['estimate'] - paired['reference']).groupby(paired.index.month)
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+        for key, label in (('reference', ref_label), ('estimate', est_label)):
+            axes[0].plot(mean.index, mean[key], marker='o', color=colors[key], label=label)
+            axes[0].fill_between(mean.index, mean[key] - std[key], mean[key] + std[key], color=colors[key], alpha=0.15)
+        axes[0].set_xticks(range(1, 13))
+        axes[0].set_xlabel('Month')
+        axes[0].set_ylabel(f"{variable_name} ({unit})")
+        axes[0].set_title('(a) Mean annual cycle (±1 SD)')
+        axes[0].legend(fontsize=8)
+        axes[0].grid(alpha=0.3)
+        bias = error.mean()
+        axes[1].bar(bias.index, bias.values, color=np.where(bias.values >= 0, 'tab:red', 'tab:blue'))
+        axes[1].axhline(0, color='k', lw=0.8)
+        axes[1].set_xticks(range(1, 13))
+        axes[1].set_xlabel('Month')
+        axes[1].set_ylabel(f"Bias, {est_label} - {ref_label} ({unit})")
+        axes[1].set_title('(b) Monthly bias')
+        axes[1].grid(alpha=0.3, axis='y')
+        fig.tight_layout()
+        saved += self._compare_save_figure(fig, os.path.join(folder, 'fig_seasonal_cycle'), formats, dpi, show)
+
+        # 4. Bland-Altman
+        diff = paired['estimate'] - paired['reference']
+        avg = (paired['estimate'] + paired['reference']) / 2
+        loa = 1.96 * diff.std(ddof=1)
+        fig, ax = plt.subplots(figsize=(6.5, 5))
+        ax.scatter(avg, diff, s=10, alpha=0.5, edgecolor='none')
+        ax.axhline(diff.mean(), color='tab:red', label=f"Bias = {diff.mean():+.3f}")
+        ax.axhline(diff.mean() + loa, color='k', ls='--', label=f"+1.96 SD = {diff.mean() + loa:+.3f}")
+        ax.axhline(diff.mean() - loa, color='k', ls='--', label=f"-1.96 SD = {diff.mean() - loa:+.3f}")
+        ax.set_xlabel(f"Mean of {est_label} and {ref_label} ({unit})")
+        ax.set_ylabel(f"{est_label} - {ref_label} ({unit})")
+        ax.set_title('Bland-Altman plot')
+        ax.legend(fontsize=8)
+        ax.grid(alpha=0.3)
+        saved += self._compare_save_figure(fig, os.path.join(folder, 'fig_bland_altman'), formats, dpi, show)
+
+        # 5. Error distribution and monthly spread
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+        axes[0].hist(diff, bins=40, color='tab:gray', edgecolor='white')
+        axes[0].axvline(0, color='k', lw=0.8)
+        axes[0].axvline(diff.mean(), color='tab:red', label=f"Mean = {diff.mean():+.3f}")
+        axes[0].set_xlabel(f"Error, {est_label} - {ref_label} ({unit})")
+        axes[0].set_ylabel('Frequency')
+        axes[0].set_title('(a) Error distribution')
+        axes[0].legend(fontsize=8)
+        months = sorted(error.groups)
+        axes[1].boxplot([diff[paired.index.month == m] for m in months], showfliers=False)
+        axes[1].set_xticklabels(months)
+        axes[1].axhline(0, color='k', lw=0.8)
+        axes[1].set_xlabel('Month')
+        axes[1].set_ylabel(f"Error ({unit})")
+        axes[1].set_title('(b) Error by month')
+        axes[1].grid(alpha=0.3, axis='y')
+        fig.tight_layout()
+        saved += self._compare_save_figure(fig, os.path.join(folder, 'fig_error_distribution'), formats, dpi, show)
+
+        # 6. Metrics per year
+        if len(by_year) >= 2:
+            fig, axes = plt.subplots(1, 3, figsize=(13, 3.8))
+            for ax, (key, title) in zip(axes, (('rmse', 'RMSE'), ('bias', 'Bias'), ('r', 'r'))):
+                ax.bar(by_year['year'].astype(int).astype(str), by_year[key], color='tab:blue')
+                ax.set_title(title)
+                ax.grid(alpha=0.3, axis='y')
+                ax.tick_params(axis='x', rotation=45)
+            axes[0].set_ylabel(unit)
+            axes[1].set_ylabel(unit)
+            axes[1].axhline(0, color='k', lw=0.8)
+            fig.suptitle('Agreement per year')
+            fig.tight_layout()
+            saved += self._compare_save_figure(fig, os.path.join(folder, 'fig_metrics_by_year'), formats, dpi, show)
+        return saved
+
+    def _compare_build_report(
+        self, paired, scales, summary, by_year, by_month, by_season, reference_column, estimate_column,
+        ref_label, est_label, variable_name, unit, aggregation, min_valid_fraction,
+    ):
+        """Build the Markdown and plain-text report; returns {'markdown': str, 'text': str}."""
+        plain_unit = re.sub(r'\$|\^|\{|\}', '', unit)
+        shown = ['n', 'mean_ref', 'mean_est', 'bias', 'pbias_pct', 'mae', 'rmse', 'nrmse_pct',
+                 'r', 'r2', 'nse', 'kge', 'willmott_d', 'slope', 'intercept']
+
+        def table(frame, first):
+            out = frame[[first] + shown].rename(columns=self._COMPARE_METRIC_LABELS)
+            out['n'] = out['n'].astype(int)
+            return out
+
+        month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        by_month_table = by_month.copy()
+        if not by_month_table.empty:
+            by_month_table['month'] = by_month_table['month'].map(lambda m: month_names[int(m) - 1])
+        by_year_table = by_year.copy()
+        if not by_year_table.empty:
+            by_year_table['year'] = by_year_table['year'].astype(int).astype(str)
+
+        sections = [
+            ('Summary by temporal scale', table(summary, 'scale')),
+            ('Agreement per year (native resolution)', table(by_year_table, 'year') if not by_year.empty else None),
+            ('Agreement per month of the year', table(by_month_table, 'month') if not by_month.empty else None),
+            ('Agreement per season', table(by_season, 'season') if not by_season.empty else None),
+        ]
+
+        native = summary.loc[summary['scale'] == 'native'].iloc[0].to_dict()
+        bullets = self._compare_interpretation(native, 'native', ref_label, est_label, plain_unit)
+        monthly = summary.loc[summary['scale'] == 'monthly'].iloc[0].to_dict()
+        if monthly['n'] >= 3:
+            bullets += self._compare_interpretation(monthly, 'monthly', ref_label, est_label, plain_unit)
+        if len(by_month) >= 2:
+            best = by_month.loc[by_month['rmse'].idxmin(), 'month']
+            worst = by_month.loc[by_month['rmse'].idxmax(), 'month']
+            largest_bias = by_month.loc[by_month['bias'].abs().idxmax()]
+            bullets.append(
+                f"Agreement is best in {month_names[int(best) - 1]} and worst in "
+                f"{month_names[int(worst) - 1]} (lowest/highest RMSE); the largest mean bias is in "
+                f"{month_names[int(largest_bias['month']) - 1]} ({largest_bias['bias']:+.3f} {plain_unit})."
+            )
+        if len(by_season) >= 2:
+            worst_season = by_season.loc[by_season['rmse'].idxmax(), 'season']
+            bullets.append(f"The seasonal RMSE is highest in {worst_season}.")
+
+        start, end = paired.index.min(), paired.index.max()
+        methods = (
+            f"{variable_name} from {est_label} ({estimate_column}) was evaluated against {ref_label} "
+            f"({reference_column}) over {start:%Y-%m-%d} to {end:%Y-%m-%d} using {native['n']} paired "
+            f"observations. Agreement was quantified with the mean bias error (estimate minus reference), "
+            f"percent bias, mean absolute error (MAE), root mean square error (RMSE), normalised RMSE, "
+            f"Pearson correlation (r), coefficient of determination (R2), Nash-Sutcliffe efficiency (NSE), "
+            f"Kling-Gupta efficiency (KGE), Willmott index of agreement (d) and the ordinary least-squares "
+            f"slope and intercept. Statistics were computed at the native resolution and on weekly, monthly "
+            f"and yearly {aggregation}s (periods with less than {min_valid_fraction:.0%} of the best-covered "
+            f"period's data were discarded), and stratified by year, month of the year and meteorological season."
+        )
+        definitions = [
+            "Bias = mean(est - ref); PBIAS = 100 * sum(est - ref) / sum(ref).",
+            "MAE = mean|est - ref|; RMSE = sqrt(mean((est - ref)^2)); NRMSE = 100 * RMSE / mean(ref).",
+            "r = Pearson correlation; R2 = r^2; Slope/Intercept = OLS of est on ref.",
+            "NSE = 1 - sum((est - ref)^2) / sum((ref - mean(ref))^2).",
+            "KGE = 1 - sqrt((r - 1)^2 + (sd_est/sd_ref - 1)^2 + (mean_est/mean_ref - 1)^2).",
+            "d = 1 - sum((est - ref)^2) / sum((|est - mean(ref)| + |ref - mean(ref)|)^2).",
+            "CCC (in the CSV files) = Lin's concordance correlation coefficient.",
+        ]
+
+        title = f"{variable_name}: {est_label} vs {ref_label}"
+        header = [
+            f"Reference: {ref_label} (`{reference_column}`)",
+            f"Estimate: {est_label} (`{estimate_column}`)",
+            f"Period: {start:%Y-%m-%d} to {end:%Y-%m-%d}; paired observations: {len(paired)}",
+            f"Unit: {plain_unit}; error = estimate - reference; aggregation: {aggregation}",
+        ]
+
+        md = [f"# {title}", ''] + [f"- {line}" for line in header] + ['']
+        txt = [title, '=' * len(title), ''] + header + ['']
+        for number, (name, frame) in enumerate(sections, start=1):
+            if frame is None:
+                continue
+            md += [f"## {number}. {name}", '', self._compare_markdown_table(frame), '']
+            txt += [f"{number}. {name}", '-' * (len(name) + 3), frame.to_string(index=False, float_format=lambda v: f"{v:.3f}"), '']
+        md += ['## 5. Interpretation', ''] + [f"- {b}" for b in bullets] + ['']
+        txt += ['5. Interpretation', '-----------------'] + [f"- {b}" for b in bullets] + ['']
+        md += ['## 6. Suggested text for the methods section', '', methods, '']
+        txt += ['6. Suggested text for the methods section', '----------------------------------------', methods, '']
+        md += ['## 7. Metric definitions', ''] + [f"- {d}" for d in definitions] + ['']
+        txt += ['7. Metric definitions', '---------------------'] + [f"- {d}" for d in definitions] + ['']
+        md += [
+            '## Figures', '',
+            '- `fig_scatter_by_scale`: scatter with 1:1 and OLS lines (native, weekly, monthly, yearly)',
+            '- `fig_timeseries_by_scale`: weekly, monthly and yearly time series',
+            '- `fig_seasonal_cycle`: mean annual cycle and monthly bias',
+            '- `fig_bland_altman`: Bland-Altman agreement plot',
+            '- `fig_error_distribution`: error histogram and error by month',
+            '- `fig_metrics_by_year`: RMSE, bias and r per year (when at least two years)',
+            '',
+        ]
+        return {'markdown': '\n'.join(md), 'text': '\n'.join(txt)}
             
     def watt_to_megaj_per_hour(self, column_name='rs'):
         self.data.transform_column(column_name, lambda o: o * 0.0036)
