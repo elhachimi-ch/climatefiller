@@ -1624,6 +1624,64 @@ class ClimateFiller():
         return column_name
 
     @staticmethod
+    def _validate_missing_data_value_dict(missing_data_value_dict):
+        if missing_data_value_dict is None:
+            return {}
+        if not isinstance(missing_data_value_dict, dict):
+            raise TypeError(
+                "missing_data_value_dict must be a dictionary of column->missing value mappings, "
+                f"got {type(missing_data_value_dict).__name__}."
+            )
+        return missing_data_value_dict
+
+    @staticmethod
+    def _resolve_missing_data_value(column_name, missing_data_value_dict):
+        """Return (found, value) for column_name; exact key first, then case-insensitive."""
+        if not missing_data_value_dict:
+            return False, None
+        if column_name in missing_data_value_dict:
+            return True, missing_data_value_dict[column_name]
+        lowered = {str(k).strip().lower(): v for k, v in missing_data_value_dict.items()}
+        key = str(column_name).strip().lower()
+        if key in lowered:
+            return True, lowered[key]
+        return False, None
+
+    def _apply_missing_data_value(self, column_name, missing_data_value_dict=None):
+        """Replace the user-declared missing-data marker of column_name with NaN.
+
+        Columns without an entry in missing_data_value_dict are left untouched, so
+        only NaN counts as missing for them (the default behavior).
+        """
+        found, missing_value = self._resolve_missing_data_value(column_name, missing_data_value_dict)
+        if not found:
+            return 0
+
+        if isinstance(missing_value, (list, tuple, set)):
+            missing_values = list(missing_value)
+        else:
+            missing_values = [missing_value]
+
+        df = self.data.get_dataframe().copy()
+        mask = df[column_name].isin(missing_values)
+        replaced_count = int(mask.sum())
+        if replaced_count > 0:
+            df.loc[mask, column_name] = np.nan
+            self.data.set_dataframe(df)
+        print(
+            "Treating {} as missing in {}: {} value(s) marked for imputation.".format(
+                missing_value, column_name, replaced_count
+            )
+        )
+        LOGGER.info(
+            "Replaced %d occurrence(s) of missing-data marker %r with NaN in column %s",
+            replaced_count,
+            missing_value,
+            column_name,
+        )
+        return replaced_count
+
+    @staticmethod
     def _extract_remote_series(dataframe, preferred_columns=None):
         preferred_columns = preferred_columns or []
         for col in preferred_columns:
@@ -1921,7 +1979,7 @@ class ClimateFiller():
         ordered_columns = [out_name] + [col for col in df.columns if col != out_name]
         return df[ordered_columns]
 
-    def impute_batch(self, input_folder, output_folder, column_to_fill_list='ta', product='era5_land', machine_learning_enabled=False, train_ratio=1, model_name='xgboost', export_dataset=False, prefix=None, datetime_format='%Y-%m-%d %H:%M:%S', unit_dict=None, **kwargs):
+    def impute_batch(self, input_folder, output_folder, column_to_fill_list='ta', product='era5_land', machine_learning_enabled=False, train_ratio=1, model_name='xgboost', export_dataset=False, prefix=None, datetime_format='%Y-%m-%d %H:%M:%S', unit_dict=None, missing_data_value_dict=None, **kwargs):
         """
         Batch impute files from input_folder and save the imputed results to output_folder.
 
@@ -1937,6 +1995,8 @@ class ClimateFiller():
             prefix (str or None): If provided, process only files that start with prefix.
             datetime_format (str): Datetime parsing format used when initializing per-file instances.
             unit_dict (dict or None): Optional variable->unit mapping passed to impute().
+            missing_data_value_dict (dict or None): Optional column->missing-data marker mapping
+                passed to impute(), e.g. ``{'rs_mean': 0}``.
 
         Returns:
             list: Output file paths generated.
@@ -1946,6 +2006,7 @@ class ClimateFiller():
         """
         if not os.path.isdir(input_folder):
             raise ValueError(f"input_folder does not exist: {input_folder}")
+        missing_data_value_dict = self._validate_missing_data_value_dict(missing_data_value_dict)
 
         self.check_directory_existance(output_folder)
 
@@ -2016,6 +2077,7 @@ class ClimateFiller():
                 model_name=model_name,
                 export_dataset=export_dataset,
                 unit_dict=unit_dict,
+                missing_data_value_dict=missing_data_value_dict,
                 show_progress=False,  # the "Batch impute" file bar above is the progress indicator here
                 **kwargs,
             )
@@ -2304,6 +2366,7 @@ class ClimateFiller():
                               model_name='xgboost',
                               export_dataset=False,
                               unit_dict=None,
+                              missing_data_value_dict=None,
                               **kwargs
                               ):
         """
@@ -2318,6 +2381,9 @@ class ClimateFiller():
             machine_learning_enabled (bool): Whether to use machine learning techniques for filling missing values. Defaults to False.
             export_dataset (bool): Whether to export the training dataset used for ML error modeling to artifact_folder. Defaults to False.
             unit_dict (dict or None): Optional variable->unit mapping. Defaults to None.
+            missing_data_value_dict (dict or None): Optional column->missing-data marker mapping.
+                Values equal to the marker are treated as missing (set to NaN) before imputation.
+                Columns without an entry use the default behavior (only NaN is missing). Defaults to None.
             backend (str or None): The backend to use for data retrieval. Defaults to None.
 
         Returns:
@@ -2351,7 +2417,10 @@ class ClimateFiller():
         variable_context = self._resolve_imputation_variable_context(requested_column_to_fill_name)
         canonical_column_to_fill_name = variable_context['canonical']
         target_column_to_fill_name = self._ensure_impute_target_column(requested_column_to_fill_name)
-        target_frequency = self._infer_frequency_label_from_index(self.data.get_dataframe().index)
+        if missing_data_value_dict is None:
+            missing_data_value_dict = getattr(self, '_impute_missing_data_value_dict', None) or {}
+        self._apply_missing_data_value(target_column_to_fill_name, missing_data_value_dict)
+        target_frequency =self._infer_frequency_label_from_index(self.data.get_dataframe().index)
         target_unit = self._resolve_impute_unit(target_column_to_fill_name, unit_dict)
 
         missing_count = self.missing_data_checking(target_column_to_fill_name, verbose=False)
@@ -3157,6 +3226,7 @@ class ClimateFiller():
                               model_name='xgboost',
                               export_dataset=False,
                               unit_dict=None,
+                              missing_data_value_dict=None,
                               show_progress=True,
                               **kwargs
                               ):
@@ -3174,6 +3244,11 @@ class ClimateFiller():
                 If a variable has no entry, the current default conversion is used.
                 Example: ``{'rs': 'mj/m2/day'}`` converts ERA5 SSRD (J/m2) to daily MJ/m2/day
                 by summing hourly energy and dividing by 1e6.
+            missing_data_value_dict (dict or None): Optional mapping of column -> missing-data marker.
+                Values equal to the marker are treated as missing and imputed, in addition to NaN.
+                A marker may be a scalar or a list of values. Columns without an entry use the
+                default behavior (only NaN is missing).
+                Example: ``{'rs_mean': 0}`` imputes every 0 in ``rs_mean``; other columns are unchanged.
             show_progress (bool): Show a tqdm progress bar over the columns being imputed.
                 Defaults to True. Per-column bars (download, row filling) are unaffected.
 
@@ -3193,6 +3268,8 @@ class ClimateFiller():
             )
 
         self._impute_unit_dict = unit_dict
+        missing_data_value_dict = self._validate_missing_data_value_dict(missing_data_value_dict)
+        self._impute_missing_data_value_dict = missing_data_value_dict
 
         column_iter = tqdm(
             column_names,
@@ -3211,6 +3288,7 @@ class ClimateFiller():
                 model_name=model_name,
                 export_dataset=export_dataset,
                 unit_dict=unit_dict,
+                missing_data_value_dict=missing_data_value_dict,
                 **kwargs,
             )
 

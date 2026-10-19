@@ -777,6 +777,58 @@ def test_impute_accepts_unit_dict(monkeypatch):
     assert cf._impute_unit_dict == {'rs': 'mj/m2/day'}
 
 
+def test_impute_forwards_missing_data_value_dict(monkeypatch):
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    df = pd.DataFrame({'date': ['2020-01-01 00:00:00'], 'rs_mean': [0.0], 'ta': [0.0]})
+    cf = ClimateFiller(df, datetime_column_name='date', backend='local', frequency='d')
+
+    seen = {}
+
+    def fake_impute_single(self, column_to_fill_name='ta', **kwargs):
+        seen[column_to_fill_name] = kwargs.get('missing_data_value_dict')
+
+    monkeypatch.setattr(ClimateFiller, '_impute_single_column', fake_impute_single)
+
+    cf.impute(column_to_fill_list=['rs_mean', 'ta'], missing_data_value_dict={'rs_mean': 0})
+
+    assert seen['rs_mean'] == {'rs_mean': 0}
+    assert seen['ta'] == {'rs_mean': 0}
+
+    with pytest.raises(TypeError, match='missing_data_value_dict must be a dictionary'):
+        cf.impute(column_to_fill_list=['rs_mean'], missing_data_value_dict=0)
+
+
+def test_missing_data_value_dict_marks_only_listed_columns_as_missing():
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    dates = ['2020-01-01', '2020-01-02', '2020-01-03']
+    df = pd.DataFrame({'date': dates, 'rs_mean': [0.0, 18.5, 0.0], 'ta': [0.0, 12.0, np.nan]})
+    cf = ClimateFiller(df, datetime_column_name='date', backend='local', frequency='d')
+
+    assert cf._apply_missing_data_value('rs_mean', {'rs_mean': 0}) == 2
+    assert cf._apply_missing_data_value('ta', {'rs_mean': 0}) == 0
+    assert cf._apply_missing_data_value('ta', {'TA': [-9999, 0]}) == 1
+
+    out = cf.data.get_dataframe()
+    assert out['rs_mean'].isna().tolist() == [True, False, True]
+    assert out['ta'].isna().tolist() == [True, False, True]
+
+
+def test_impute_single_column_treats_marker_as_missing():
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    dates = ['2020-01-01', '2020-01-02']
+    df = pd.DataFrame({'date': dates, 'rs_mean': [0.0, 18.5]})
+
+    complete = ClimateFiller(df.copy(), datetime_column_name='date', backend='local', frequency='d')
+    complete._impute_single_column('rs_mean')  # 0 is a valid value by default
+
+    gappy = ClimateFiller(df.copy(), datetime_column_name='date', backend='local', frequency='d')
+    with pytest.raises(ValueError, match=r"Imputing 'rs_mean' from era5_land needs lat and lon"):
+        gappy._impute_single_column('rs_mean', missing_data_value_dict={'rs_mean': 0})
+
+
 def test_fill_from_source_series_updates_target_column_without_set_row():
     os.environ.setdefault('GEE_PROJECT', 'dummy')
 
