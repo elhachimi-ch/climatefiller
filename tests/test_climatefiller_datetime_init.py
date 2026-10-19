@@ -1283,6 +1283,41 @@ def test_eto_estimation_daily_multiple_methods_add_columns(monkeypatch):
     assert 'eto_hs' in cf.eto_output_data.get_dataframe().columns
 
 
+def test_eto_estimation_daily_overwrite_controls_existing_eto_columns(monkeypatch):
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+
+    daily_df = pd.DataFrame(
+        {
+            'date': ['2020-01-01 00:00:00', '2020-01-02 00:00:00'],
+            'ta_max': [30.0, 31.0],
+            'ta_min': [18.0, 19.0],
+            'rs_mean': [18.0, 20.0],
+            'eto_pm': [9.9, 9.8],
+        }
+    )
+    monkeypatch.setattr(
+        'climatefiller.Lib.eto_hargreaves_samani',
+        lambda row, c=0.0023, a=17.8, b=0.5, units_dict=None: 3.1,
+    )
+    monkeypatch.setattr(
+        'climatefiller.Lib.eto_penman_monteith_daily',
+        lambda row, units_dict=None: 4.2,
+    )
+
+    # overwrite=False keeps the existing eto_pm, so pm inputs (rh, ws) are not required.
+    keep = ClimateFiller(daily_df.copy(), datetime_column_name='date', backend='local', lat=31.65, elevation=500)
+    result = keep.eto_estimation_daily(methods_list=['pm', 'hs'], overwrite=False)
+    assert list(result['eto_pm']) == [9.9, 9.8]
+    assert list(result['eto_hs']) == [3.1, 3.1]
+    assert list(result.columns[-2:]) == ['eto_pm', 'eto_hs']
+
+    # overwrite=True (default) recomputes eto_pm, which needs the pm inputs.
+    full_df = daily_df.assign(rh_max=[80.0, 75.0], rh_min=[40.0, 35.0], ws_mean=[2.0, 2.5])
+    replace = ClimateFiller(full_df, datetime_column_name='date', backend='local', lat=31.65, elevation=500)
+    result = replace.eto_estimation_daily(methods_list=['pm'])
+    assert list(result['eto_pm']) == [4.2, 4.2]
+
+
 def test_eto_estimation_daily_requires_method_specific_columns():
     os.environ.setdefault('GEE_PROJECT', 'dummy')
 

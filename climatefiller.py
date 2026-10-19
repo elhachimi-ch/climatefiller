@@ -4074,6 +4074,7 @@ class ClimateFiller():
         k1_ab=0.53,
         alpha_pt=1.26,
         units_dict=None,
+        overwrite=True,
     ):
         """
         Estimate daily reference evapotranspiration (ETo) from an already-daily weather dataset.
@@ -4105,6 +4106,10 @@ class ClimateFiller():
                 When provided, values are converted to FAO-56 targets:
                 ta °C, rh %, ws m/s, rs MJ/m2/day.
                 Example: {'rs': 'MJ/m2/day'} skips the W/m2->MJ/m2/day conversion.
+            overwrite (bool): What to do when the input data already has a column named like a
+                method output (e.g. 'eto_pm'). True (default) recomputes it and the new values
+                replace the existing ones. False keeps the existing column as-is and skips that
+                method, so its input columns are not required.
 
         Returns:
             pandas.DataFrame: Daily dataframe with ETo column(s) and supporting columns.
@@ -4157,6 +4162,19 @@ class ClimateFiller():
         source_df = self.data.get_dataframe()
         if source_df is None or len(source_df) == 0:
             raise ValueError("No in-situ data available for daily ETo estimation.")
+
+        kept_methods = []
+        for method in methods:
+            output_column = f'eto_{method}'
+            if output_column not in source_df.columns:
+                continue
+            if overwrite:
+                print(f"[eto_estimation_daily] Overwriting existing column '{output_column}'.")
+            else:
+                print(f"[eto_estimation_daily] Keeping existing column '{output_column}' (overwrite=False).")
+                kept_methods.append(method)
+        all_methods = methods
+        methods = [method for method in all_methods if method not in kept_methods]
 
         available_columns = set(source_df.columns)
         column_aliases = {
@@ -4277,7 +4295,15 @@ class ClimateFiller():
                     data_temp.transform_column(output_column, lambda o: o if o > 0 else 0)
                 data_temp.transform_column(output_column, lambda o: round(o, nbr_decimal_places))
 
-        self.eto_output_data.set_dataframe(data_temp.get_dataframe())
+        output_df = data_temp.get_dataframe()
+        for method in kept_methods:
+            output_column = f'eto_{method}'
+            output_df[output_column] = source_df[output_column].to_numpy()
+        # Keep the eto_* columns in the requested methods order.
+        eto_columns = [f'eto_{method}' for method in all_methods]
+        output_df = output_df[[col for col in output_df.columns if col not in eto_columns] + eto_columns]
+
+        self.eto_output_data.set_dataframe(output_df)
         return self.eto_output_data.get_dataframe()
 
     def eto_estimation_daily_batch(
@@ -4302,6 +4328,7 @@ class ClimateFiller():
         units_dict=None,
         prefix=None,
         datetime_format='%Y-%m-%d %H:%M:%S',
+        overwrite=True,
     ):
         """
         Batch daily ETo estimation for all supported files in input_folder.
@@ -4322,6 +4349,8 @@ class ClimateFiller():
             units_dict (dict or None): Optional variable units forwarded to eto_estimation_daily().
             prefix (str or None): If provided, process only files that start with prefix.
             datetime_format (str): Datetime parsing format for per-file initialization.
+            overwrite (bool): Forwarded to eto_estimation_daily(). True (default) recomputes
+                eto_<method> columns already present in a file; False keeps them.
 
         Returns:
             list: Output file paths generated.
@@ -4425,6 +4454,7 @@ class ClimateFiller():
                 k1_ab=k1_ab,
                 alpha_pt=alpha_pt,
                 units_dict=units_dict,
+                overwrite=overwrite,
             )
 
             export_df = estimator.eto_output_data.get_dataframe().copy()
