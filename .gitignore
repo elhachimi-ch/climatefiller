@@ -21,3 +21,5 @@ medgu_barcelone_ml_beat_hs_magnus.ipynb
 *.data
 *tempCodeRunnerFile.py
 *.claude
+*.pkl
+*.png

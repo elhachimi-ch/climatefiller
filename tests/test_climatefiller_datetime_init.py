@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import types
@@ -161,6 +162,27 @@ from climatefiller import ClimateFiller
 import climatefiller as climatefiller_module
 
 
+@pytest.mark.parametrize(
+    ('requested_name', 'toolkit_name'),
+    [
+        ('xgboost', 'xgboost'),
+        ('xb', 'xgboost'),
+        ('random_forest', 'random_forest'),
+        ('rf', 'random_forest'),
+        ('decision_tree', 'decision_tree'),
+        ('dt', 'decision_tree'),
+        ('linear_regression', 'linear_regression'),
+        ('lr', 'linear_regression'),
+        ('knn', 'knn'),
+        ('gradient_boosting', 'gradient_boosting'),
+        ('gb', 'gradient_boosting'),
+        ('svm', 'svm'),
+    ],
+)
+def test_resolve_model_name_returns_toolkit_supported_name(requested_name, toolkit_name):
+    assert ClimateFiller._resolve_model_name(requested_name) == toolkit_name
+
+
 def test_gee_project_pool_parses_and_deduplicates_environment_values(monkeypatch):
     monkeypatch.setenv('EE_PROJECT_POOL', 'project-a, project-b, project-a,')
     monkeypatch.setenv('GEE_PROJECT', 'legacy-project')
@@ -240,6 +262,110 @@ def test_fill_from_source_series_matches_timezone_normalized_indexes():
     cf._fill_from_source_series('rh_max', source_series, 'era5_land', machine_learning_enabled=False)
 
     assert cf.data.get_dataframe()['rh_max'].notna().all()
+
+
+def test_save_error_model_artifact_moves_toolkit_file_into_artifact_folder(tmp_path):
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+    artifact_folder = tmp_path / 'artifacts'
+    cf = ClimateFiller(
+        pd.DataFrame({'date': ['2020-01-01 00:00:00'], 'value': [1.0]}),
+        datetime_column_name='date',
+        backend='local',
+        artifact_folder=str(artifact_folder),
+    )
+    toolkit_dir = tmp_path / 'results_monitor'
+    toolkit_file = toolkit_dir / 'xgboost_20260101_000000.pkl'
+
+    class _SavingModel:
+        # Mirrors data_science_toolkit Model.save_model(): no arguments, timestamped file, returns its path.
+        def save_model(self):
+            toolkit_dir.mkdir(exist_ok=True)
+            toolkit_file.write_bytes(b'model-bytes')
+            return str(toolkit_file)
+
+    artifact_path = cf._save_error_model_artifact(
+        _SavingModel(),
+        ['source_value'],
+        't2m',
+        'era5_land',
+        'xgboost',
+        {'n_train': np.int64(10)},
+    )
+
+    expected_artifact = artifact_folder / 'era5_land_t2m_xgboost_error_model.pkl'
+    assert artifact_path == str(expected_artifact)
+    assert expected_artifact.read_bytes() == b'model-bytes'
+    assert not toolkit_file.exists()
+    with open(artifact_folder / 'era5_land_t2m_xgboost_error_model_meta.json', encoding='utf-8') as f:
+        metadata = json.load(f)
+    assert metadata['model_artifact_path'] == str(expected_artifact)
+    assert metadata['feature_columns'] == ['source_value']
+    assert metadata['performance'] == {'n_train': 10}
+
+
+def test_save_error_model_artifact_tolerates_model_that_saved_nothing(tmp_path):
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+    artifact_folder = tmp_path / 'artifacts'
+    cf = ClimateFiller(
+        pd.DataFrame({'date': ['2020-01-01 00:00:00'], 'value': [1.0]}),
+        datetime_column_name='date',
+        backend='local',
+        artifact_folder=str(artifact_folder),
+    )
+
+    class _SilentModel:
+        def save_model(self):
+            return None
+
+    artifact_path = cf._save_error_model_artifact(_SilentModel(), ['source_value'], 't2m', 'era5_land', 'xgboost', {})
+
+    assert artifact_path is None
+    with open(artifact_folder / 'era5_land_t2m_xgboost_error_model_meta.json', encoding='utf-8') as f:
+        metadata = json.load(f)
+    assert metadata['model_artifact_path'] is None
+
+
+def test_train_error_model_routes_toolkit_outputs_to_artifact_folder(monkeypatch, tmp_path):
+    os.environ.setdefault('GEE_PROJECT', 'dummy')
+    captured_kwargs = {}
+
+    class _RecordingModel:
+        def __init__(self, **kwargs):
+            captured_kwargs.update(kwargs)
+
+        def train(self):
+            return None
+
+        def predict(self, x):
+            return np.zeros(len(x))
+
+        def regression_report(self, y_true, y_pred):
+            return {'RMSE': 0.0}
+
+        def save_model(self):
+            return None
+
+    monkeypatch.setattr(climatefiller_module, 'Model', _RecordingModel)
+    index = pd.date_range('2020-01-01', periods=48, freq='h')
+    df = pd.DataFrame({
+        'date': index.strftime('%Y-%m-%d %H:%M:%S'),
+        'rh_max': np.linspace(10.0, 20.0, 48),
+    })
+    artifact_folder = tmp_path / 'artifacts'
+    cf = ClimateFiller(df, datetime_column_name='date', backend='local', artifact_folder=str(artifact_folder))
+    source_series = pd.Series(np.linspace(11.0, 21.0, 48), index=index)
+
+    _, feature_columns, performance = cf._train_error_model('rh_max', source_series, 'era5_land')
+
+    assert captured_kwargs['output_metrics_dir'] == str(artifact_folder)
+    assert captured_kwargs['model_name'] == 'xgboost'
+    assert feature_columns == ['source_value']
+    assert performance['n_train'] == 48
+
+    captured_kwargs.clear()
+    cf._train_error_model('rh_max', source_series, 'era5_land', output_metrics_dir=str(tmp_path / 'custom'))
+
+    assert captured_kwargs['output_metrics_dir'] == str(tmp_path / 'custom')
 
 
 def test_add_extraterrestrial_radiation_daily_column_uses_latitude_and_day_of_year(monkeypatch):

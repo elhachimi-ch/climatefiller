@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import random
+import shutil
 import threading
 import time
 import warnings
@@ -801,28 +802,29 @@ class ClimateFiller():
         )
 
     @staticmethod
-    def _resolve_model_type(model_name):
+    def _resolve_model_name(model_name):
         mapping = {
-            'xgboost': 'xb',
-            'xb': 'xb',
-            'random_forest': 'rf',
-            'rf': 'rf',
-            'decision_tree': 'dt',
-            'dt': 'dt',
-            'linear_regression': 'lr',
-            'lr': 'lr',
+            'xgboost': 'xgboost',
+            'xb': 'xgboost',
+            'random_forest': 'random_forest',
+            'rf': 'random_forest',
+            'decision_tree': 'decision_tree',
+            'dt': 'decision_tree',
+            'linear_regression': 'linear_regression',
+            'lr': 'linear_regression',
             'knn': 'knn',
-            'gradient_boosting': 'gb',
-            'gb': 'gb',
+            'gradient_boosting': 'gradient_boosting',
+            'gb': 'gradient_boosting',
             'svm': 'svm',
         }
-        model_type = mapping.get(str(model_name).lower())
-        if model_type is None:
+        requested_model_name = str(model_name).lower()
+        resolved_model_name = mapping.get(requested_model_name)
+        if resolved_model_name is None:
             raise ValueError(
-                f"Unsupported model_name '{model_name}'. "
+                f"Unsupported model_name '{requested_model_name}'. "
                 "Supported values are: xgboost, random_forest, decision_tree, linear_regression, knn, gradient_boosting, svm"
             )
-        return model_type
+        return resolved_model_name
 
     @staticmethod
     def _format_coord_for_cache(value):
@@ -1316,9 +1318,30 @@ class ClimateFiller():
         return value
 
     def _save_error_model_artifact(self, model, feature_columns, column_to_fill_name, product, model_name, performance):
-        model_artifact_name = f"{product}_{column_to_fill_name}_{model_name}_error_model.data"
-        model_artifact_path = os.path.join(self.artifact_folder, model_artifact_name)
-        model.save_model(model_artifact_path)
+        # Model.save_model() takes no path: it writes "<model_name>_<timestamp>.<ext>" under the
+        # model's output_metrics_dir and returns that path (None when nothing could be saved).
+        saved_path = model.save_model()
+        model_artifact_path = None
+        if saved_path and os.path.exists(saved_path):
+            # Keep a stable, overwritable artifact name. The toolkit's extension is preserved
+            # because Model.load_model() dispatches on it.
+            extension = os.path.splitext(saved_path)[1]
+            model_artifact_name = f"{product}_{column_to_fill_name}_{model_name}_error_model{extension}"
+            model_artifact_path = os.path.join(self.artifact_folder, model_artifact_name)
+            try:
+                os.replace(saved_path, model_artifact_path)
+            except OSError:
+                # os.replace cannot cross volumes (custom output_metrics_dir on another drive).
+                shutil.move(saved_path, model_artifact_path)
+            LOGGER.info("Model artifact saved: %s", model_artifact_path)
+            print(f"Saved ML artifact to {model_artifact_path}")
+        else:
+            LOGGER.warning(
+                "Model.save_model() did not produce a file for %s/%s (returned %r); no model artifact written.",
+                product,
+                column_to_fill_name,
+                saved_path,
+            )
 
         metadata_name = f"{product}_{column_to_fill_name}_{model_name}_error_model_meta.json"
         metadata_path = os.path.join(self.artifact_folder, metadata_name)
@@ -1327,15 +1350,15 @@ class ClimateFiller():
             'column_to_fill_name': column_to_fill_name,
             'product': product,
             'model_name': model_name,
+            'model_artifact_path': model_artifact_path,
             'trained_at': datetime.datetime.utcnow().isoformat(),
             'performance': self._to_json_safe(performance),
         }
         with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2)
-        LOGGER.info("Model artifact saved: %s", model_artifact_path)
         LOGGER.info("Model metadata saved: %s", metadata_path)
-        print(f"Saved ML artifact to {model_artifact_path}")
         print(f"Saved ML metadata to {metadata_path}")
+        return model_artifact_path
 
     def _save_training_dataset_artifact(self, train_dataset, column_to_fill_name, product, model_name):
         dataset_name = f"{product}_{column_to_fill_name}_{model_name}_training_dataset.csv"
@@ -1397,7 +1420,7 @@ class ClimateFiller():
         LOGGER.info("Training target column: %s", target_column_name)
         print(f"Features used for training: {list(X.columns)}")
         print(f"Target used for training: {target_column_name}")
-        model_type = self._resolve_model_type(model_name)
+        model_name = self._resolve_model_name(model_name)
         train_ratio = float(train_ratio)
         if train_ratio <= 0 or train_ratio > 1:
             raise ValueError("train_ratio must be in (0, 1].")
@@ -1425,11 +1448,14 @@ class ClimateFiller():
                 model_name,
             )
 
+        # Route the toolkit's own outputs (metrics, plots, saved model) into the artifact folder
+        # instead of its default "./results_monitor" relative to the current working directory.
+        model_kwargs.setdefault('output_metrics_dir', self.artifact_folder)
         try:
             model = Model(
                 data_x=x_train,
                 data_y=y_train,
-                model_type=model_type,
+                model_name=model_name,
                 task='r',
                 training_percent=1,
                 **model_kwargs,
@@ -1990,6 +2016,7 @@ class ClimateFiller():
                 model_name=model_name,
                 export_dataset=export_dataset,
                 unit_dict=unit_dict,
+                show_progress=False,  # the "Batch impute" file bar above is the progress indicator here
                 **kwargs,
             )
 
@@ -3130,6 +3157,7 @@ class ClimateFiller():
                               model_name='xgboost',
                               export_dataset=False,
                               unit_dict=None,
+                              show_progress=True,
                               **kwargs
                               ):
         """
@@ -3146,6 +3174,8 @@ class ClimateFiller():
                 If a variable has no entry, the current default conversion is used.
                 Example: ``{'rs': 'mj/m2/day'}`` converts ERA5 SSRD (J/m2) to daily MJ/m2/day
                 by summing hourly energy and dividing by 1e6.
+            show_progress (bool): Show a tqdm progress bar over the columns being imputed.
+                Defaults to True. Per-column bars (download, row filling) are unaffected.
 
         Returns:
             ClimateFiller: The current instance for chaining.
@@ -3164,7 +3194,15 @@ class ClimateFiller():
 
         self._impute_unit_dict = unit_dict
 
-        for column_name in column_names:
+        column_iter = tqdm(
+            column_names,
+            total=len(column_names),
+            desc=f"Impute columns ({product})",
+            unit="column",
+            disable=not show_progress,
+        )
+        for column_name in column_iter:
+            column_iter.set_postfix_str(column_name)
             self._impute_single_column(
                 column_name,
                 product=product,
